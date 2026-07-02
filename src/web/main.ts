@@ -20,7 +20,7 @@ function render(seed: number) {
     <main class="shell">
       <section class="hero">
         <div>
-          <p class="kicker">P0 Web Verification</p>
+          <p class="kicker">P1 経済エンジン検証</p>
           <h1>メェコノミー</h1>
           <p class="lead">羊のサプライチェーンを12ヶ月まわして、れんけつ利益・現金・羊数・イベントの流れを眺める検証ビュー。</p>
         </div>
