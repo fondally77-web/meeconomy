@@ -1,7 +1,7 @@
-# メェコノミー — P1 経済エンジン
+# メェコノミー — P2 経済エンジン＋バランス収束
 
 羊の神視点サプライチェーン×ラン制ローグライト『メェコノミー』の経済エンジン（UIなし）。
-設計の正は docs/01〜05（v0.5）。
+設計の正は docs/01〜05（v0.5）。P1（経済エンジン・受け入れ17件）とP2（simボット4種・バランス収束）まで完了。
 
 ## Webで確認する（GitHub Pages）
 公開URL: https://fondally77-web.github.io/meeconomy/
@@ -17,12 +17,19 @@
 ## セットアップ
 ```bash
 npm install
-npm test          # 受け入れテスト17件（docs/05 §5.1準拠）
+npm test          # 受け入れテスト23件（P1: docs/05 §5.1の17件＋P2: §5.3のバランス6件）
 npm run cli       # balancedボットで12ヶ月ラン（seed指定可: npm run cli -- 42）
 npm run dev       # Web検証ビューを起動（seed変更・12ヶ月推移確認）
 npm run build     # 型チェック＋Webビルド
-npx tsx sim/batch.ts  # 200シードのランク分布
+npx tsx sim/batch.ts       # P2バランス検証（4ボット×1000ラン＋強化半分、02_§11の目標判定つき）
+npx tsx sim/batch.ts 300   # シード数を変えて高速チェック
 ```
+
+## P2 バランス収束（02_§11）
+- `sim/bots.ts` … ボット4種（idle=毎月おまかせ／balanced=季節運用／meatOnly=全頭出荷／woolOnly=毛だけ）と強化半分セット
+- `sim/batch.ts` … 各1000ランの検証バッチ。実測：idle黒字率64.8%／balancedが最良（+18,771G・B中心、強化半分でA中心）／meatOnly夏強・年間劣後／woolOnly低リスク低リターン——§11全目標達成
+- 調整内容と理由は docs/02 §13 の #3 を参照（基礎需要・大型レシピ価格・直販価格）
+- 1ラン所要時間の検算（05_§5.3）：月あたり指示 約15タップ×2秒＋フロー30秒 ≒ 1分 → 12ヶ月 ≒ **12分 ≦ 16分** ✓
 
 ## 構成
 - `src/game/types.ts` … 型定義（docs/04の実装版。StockLotにgroupCost追加）

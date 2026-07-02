@@ -35,22 +35,25 @@ export const YARN_PER_WOOL = 2;
 export interface RecipeDef {
   inputGoods: GoodsId; inputQty: number; fee: number; marketPrice: number; line: MarketLine;
 }
+// 調整履歴#3: 大型レシピの市場価格を是正（投入1単位あたり粗利を平準化）
+// lambCurry 2,200→2,000 / lambChop 6,800→5,600 / blanket 5,800→5,400 / coat 11,000→8,800
 export const RECIPES: Record<RecipeId, RecipeDef> = {
   genghis:     { inputGoods: 'lambMeat', inputQty: 2, fee: 300, marketPrice: 3_600, line: 'meatLine' },
   lambSausage: { inputGoods: 'lambMeat', inputQty: 2, fee: 250, marketPrice: 3_300, line: 'meatLine' },
-  lambCurry:   { inputGoods: 'lambMeat', inputQty: 1, fee: 350, marketPrice: 2_200, line: 'meatLine' },
-  lambChop:    { inputGoods: 'lambMeat', inputQty: 3, fee: 600, marketPrice: 6_800, line: 'meatLine' },
+  lambCurry:   { inputGoods: 'lambMeat', inputQty: 1, fee: 350, marketPrice: 2_000, line: 'meatLine' },
+  lambChop:    { inputGoods: 'lambMeat', inputQty: 3, fee: 600, marketPrice: 5_600, line: 'meatLine' },
   muffler:     { inputGoods: 'yarn', inputQty: 2, fee: 200, marketPrice: 2_600, line: 'apparelLine' },
   sweater:     { inputGoods: 'yarn', inputQty: 3, fee: 300, marketPrice: 4_200, line: 'apparelLine' },
-  blanket:     { inputGoods: 'yarn', inputQty: 4, fee: 400, marketPrice: 5_800, line: 'apparelLine' },
-  coat:        { inputGoods: 'yarn', inputQty: 6, fee: 800, marketPrice: 11_000, line: 'apparelLine' },
+  blanket:     { inputGoods: 'yarn', inputQty: 4, fee: 400, marketPrice: 5_400, line: 'apparelLine' },
+  coat:        { inputGoods: 'yarn', inputQty: 6, fee: 800, marketPrice: 8_800, line: 'apparelLine' },
 };
 export const MEAT_RECIPES: MeatRecipeId[] = ['genghis','lambSausage','lambCurry','lambChop'];
 export const APPAREL_RECIPES: ApparelRecipeId[] = ['muffler','sweater','blanket','coat'];
 
 // ── 直販市場価格 ──
+// 調整履歴#3: lambMeat直販 1,400→1,300（直販全振りが加工ルートより儲かってしまうため）
 export const DIRECT_MARKET_PRICE: Partial<Record<GoodsId, number>> = {
-  lambMeat: 1_400,
+  lambMeat: 1_300,
   yarn: 750,
 };
 
@@ -82,7 +85,9 @@ export const COMPANY_CAPACITY: Record<CompanyId, number> = {
 };
 
 // ── 需要 ──
-export const BASE_DEMAND: Record<MarketLine, number> = { meatLine: 40, apparelLine: 30 };
+// 調整履歴#3: 40/30→12/10。実スループット（トラック3台×8箱・3区間チェーン≒外販8〜10箱/月）
+// に対して需要が大きすぎ、季節係数・販売網強化・価格スタンスが一度も効かなかったため
+export const BASE_DEMAND: Record<MarketLine, number> = { meatLine: 10, apparelLine: 10 };
 export const SEASON_FACTOR = (month: number): Record<MarketLine, number> => {
   // month: 0=4月 … 11=3月
   if (month <= 2)  return { meatLine: 1.0, apparelLine: 0.8 };  // 4-6月
