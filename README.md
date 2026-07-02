@@ -3,6 +3,17 @@
 羊の神視点サプライチェーン×ラン制ローグライト『メェコノミー』の経済エンジン（UIなし）。
 設計の正は docs/01〜05（v0.5）。
 
+## Webで確認する（GitHub Pages）
+公開URL: https://fondally77-web.github.io/meeconomy/
+
+初回のみリポジトリ設定でPagesを有効化する必要があります：
+1. GitHubのリポジトリページ → **Settings** → 左メニューの **Pages**
+2. 「Build and deployment」の Source を **Deploy from a branch** にする
+3. Branch で **gh-pages** / **(root)** を選んで **Save**
+4. 1〜2分待って上のURLを開く
+
+以後はプッシュのたびにGitHub Actionsが自動でテスト→ビルド→`gh-pages`ブランチへ公開します。
+
 ## セットアップ
 ```bash
 npm install
