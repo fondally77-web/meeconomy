@@ -8,6 +8,8 @@
 npm install
 npm test          # 受け入れテスト17件（docs/05 §5.1準拠）
 npm run cli       # balancedボットで12ヶ月ラン（seed指定可: npm run cli -- 42）
+npm run dev       # Web検証ビューを起動（seed変更・12ヶ月推移確認）
+npm run build     # 型チェック＋Webビルド
 npx tsx sim/batch.ts  # 200シードのランク分布
 ```
 

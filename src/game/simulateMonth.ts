@@ -200,13 +200,14 @@ export function simulateMonth(
   const buy = Math.min(orders.lambsToBuy, room, Math.floor(s.cash / Math.max(1, lambPrice)));
   if (buy > 0) {
     s.flock.lambs += buy;
-    post(ctx, 'BUY_LAMB', 'lamb', [
+    const buyLines: JournalLine[] = [
       { account: 'livestock', side: 'debit', amount: C.SHEEP_BOOK_VALUE * buy, companyId: 'farm' },
       { account: 'cash', side: 'credit', amount: lambPrice * buy, companyId: 'farm' },
       ...(lambPrice < C.SHEEP_BOOK_VALUE
         ? [{ account: 'bonusIncome', side: 'credit', amount: (C.SHEEP_BOOK_VALUE - lambPrice) * buy, companyId: 'farm' } as JournalLine]
         : []),
-    ].filter(l => l.amount > 0));
+    ];
+    post(ctx, 'BUY_LAMB', 'lamb', buyLines.filter(l => l.amount > 0));
     // 相場安の差額は雑収入で調整（帳簿価額800を維持するため）
     if (lambPrice > C.SHEEP_BOOK_VALUE) throw new Error('lamb price above book value not supported');
     cashOut(ctx, lambPrice * buy);
