@@ -71,6 +71,15 @@ canvas {
 
 /* パネル（指示・リザルト） */
 #panel { flex: 1; }
+.mapHint .hintLine { font-size: 13px; opacity: .9; }
+.note { font-size: 12px; margin: 4px 0; opacity: .9; }
+.note.dim { opacity: .6; font-size: 11px; }
+.closeBtn { float: right; font-size: 11px; }
+.companyWin { animation: winIn 120ms ease-out; }
+@keyframes winIn {
+  0% { transform: translateY(6px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
 .secTitle { color: var(--gold); margin: 8px 0 4px; font-size: 14px; }
 .secTitle small, .lbl small, .scoreRow small { font-size: 10px; opacity: .75; }
 .step { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; }

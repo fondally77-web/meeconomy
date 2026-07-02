@@ -31,14 +31,37 @@ const ROUTE_GEO: Record<RouteId, { lane: 'wool' | 'meat'; from: number; to: numb
   'delica-sales':  { lane: 'meat', from: 200, to: 254 },
 };
 
+const DEPOT = { x: 6, y: 162, w: 46, h: 32 };        // ロジ車庫（道路2本の間）
+
 interface VisualSheep {
   x: number; y: number; dir: number; walkT: number; pause: number;
   kind: 'wool' | 'shorn' | 'baby';
+  preview: boolean;                      // マップ上のタップで「今月刈る」に指定済み
 }
 interface FlowTruck { route: RouteId; t: number; delay: number; done: boolean }
 interface TimelineEvent { at: number; fn: () => void; fired: boolean }
 
 export type PopFn = (gx: number, gy: number, text: string, color?: string) => void;
+export type TapTarget =
+  | { kind: 'building'; id: 'meat' | 'delica' | 'wool' | 'apparel' | 'sales' }
+  | { kind: 'pen' }
+  | { kind: 'depot' };
+
+export interface MapHandlers {
+  /** 羊タップで毛刈り予約してよいか（毛刈り班の上限判定） */
+  canShear(currentPreview: number): boolean;
+  /** 毛刈り予約数が変わった */
+  onShearChange(count: number): void;
+  /** 建物・牧場・車庫のタップ */
+  onTap(target: TapTarget): void;
+}
+
+/** マップに重ねる指示バッジ（指示済み✓と配車） */
+export interface MapBadges {
+  ordered: Set<string>;
+  trucks: Partial<Record<RouteId, number>>;
+  trucksLeft: number;
+}
 
 export class PipelineView {
   private ctx: CanvasRenderingContext2D;
@@ -47,6 +70,9 @@ export class PipelineView {
   private cloudX = 0;
   private last = performance.now();
   private reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  private previewShearCount = 0;
+  private badges: MapBadges = { ordered: new Set(), trucks: {}, trucksLeft: 0 };
+  private mapMode = true;                // 指示フェーズ中はタップ受付
 
   // フローフェーズ
   private flowT = -1;                    // <0 なら待機中
@@ -56,13 +82,87 @@ export class PipelineView {
   private onFlowDone: (() => void) | null = null;
   private coinFx: { x: number; y: number; t: number }[] = [];
 
-  constructor(private cv: HTMLCanvasElement, private pop: PopFn) {
+  constructor(private cv: HTMLCanvasElement, private pop: PopFn, private handlers: MapHandlers) {
     const ctx = cv.getContext('2d');
     if (!ctx) throw new Error('no 2d context');
     this.ctx = ctx;
     ctx.imageSmoothingEnabled = false;
-    cv.addEventListener('pointerdown', () => this.skipFlow());
+    cv.addEventListener('pointerdown', e => this.onPointer(e));
     requestAnimationFrame(now => this.loop(now));
+  }
+
+  setMapMode(on: boolean): void { this.mapMode = on; }
+  setBadges(b: MapBadges): void { this.badges = b; }
+
+  private onPointer(e: PointerEvent): void {
+    if (this.flowT >= 0) { this.skipFlow(); return; }
+    if (!this.mapMode) return;
+    const r = this.cv.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * CW;
+    const y = ((e.clientY - r.top) / r.height) * CH;
+    // 羊（手前優先）
+    const hit = [...this.sheep].sort((a, b) => b.y - a.y).find(s =>
+      s.kind !== 'baby' && x >= s.x - 2 && x <= s.x + 18 && y >= s.y - 4 && y <= s.y + 14);
+    if (hit) { this.onSheepTap(hit); return; }
+    // 建物
+    for (const [cid, b] of Object.entries(BUILDINGS)) {
+      const roadY = b.lane === 'meat' ? MEAT_ROAD_Y : WOOL_ROAD_Y;
+      const top = (b.lane === 'both' ? WOOL_ROAD_Y - 44 : roadY - 46) - 5;
+      const h = (b.lane === 'both' ? MEAT_ROAD_Y - (WOOL_ROAD_Y - 44) - 16 : 28) + 5;
+      if (x >= b.x && x <= b.x + b.w && y >= top && y <= top + h) {
+        this.handlers.onTap({ kind: 'building', id: cid as 'meat' });
+        return;
+      }
+    }
+    if (x >= DEPOT.x && x <= DEPOT.x + DEPOT.w && y >= DEPOT.y - 6 && y <= DEPOT.y + DEPOT.h) {
+      this.handlers.onTap({ kind: 'depot' });
+      return;
+    }
+    if (x >= PEN.x && x <= PEN.x + PEN.w && y >= PEN.y - 14 && y <= PEN.y + PEN.h) {
+      this.handlers.onTap({ kind: 'pen' });
+    }
+  }
+
+  private onSheepTap(s: VisualSheep): void {
+    if (s.kind === 'wool') {
+      if (!this.handlers.canShear(this.previewShearCount)) {
+        SE.mee();
+        this.pop(s.x + 8, s.y - 8, 'メェ…（毛刈り班がいっぱい）', '#ffd24a');
+        return;
+      }
+      s.kind = 'shorn'; s.preview = true;
+      this.previewShearCount++;
+      SE.shear(); setTimeout(() => SE.pop(), 90);
+      this.pop(s.x + 8, s.y - 10, 'ポンッ！', '#fff');
+      this.handlers.onShearChange(this.previewShearCount);
+    } else if (s.preview) {
+      s.kind = 'wool'; s.preview = false;
+      this.previewShearCount--;
+      SE.decide();
+      this.pop(s.x + 8, s.y - 8, 'もどした', '#9fd0ff');
+      this.handlers.onShearChange(this.previewShearCount);
+    } else {
+      SE.mee();
+      this.pop(s.x + 8, s.y - 8, 'メェ…（回復待ち）', '#ffd24a');
+    }
+  }
+
+  /** おまかせ等で毛刈り数を外から設定（先頭n頭をプレビューに）。実際に指定できた数を返す */
+  applyShearPreview(n: number): number {
+    for (const s of this.sheep) if (s.preview) { s.kind = 'wool'; s.preview = false; }
+    let c = 0;
+    for (const s of this.sheep) {
+      if (c >= n) break;
+      if (s.kind === 'wool') { s.kind = 'shorn'; s.preview = true; c++; }
+    }
+    this.previewShearCount = c;
+    return c;
+  }
+
+  /** フロー開始前にプレビューを解除（演出で改めて刈る） */
+  clearShearPreview(): void {
+    for (const s of this.sheep) if (s.preview) { s.kind = 'wool'; s.preview = false; }
+    this.previewShearCount = 0;
   }
 
   /** 群れの頭数に合わせて牧場の羊を同期 */
@@ -77,12 +177,13 @@ export class PipelineView {
     while (this.sheep.length < want.length) {
       this.sheep.push({
         x: PEN.x + 6 + Math.random() * (PEN.w - 28),
-        y: PEN.y + 8 + Math.random() * (PEN.h - 26),
+        y: PEN.y + 14 + Math.random() * (PEN.h - 32),
         dir: Math.random() < 0.5 ? -1 : 1,
-        walkT: Math.random() * 100, pause: Math.random() * 2, kind: 'wool',
+        walkT: Math.random() * 100, pause: Math.random() * 2, kind: 'wool', preview: false,
       });
     }
-    want.forEach((k, i) => { this.sheep[i].kind = k; });
+    want.forEach((k, i) => { this.sheep[i].kind = k; this.sheep[i].preview = false; });
+    this.previewShearCount = 0;
   }
 
   get inFlow(): boolean { return this.flowT >= 0; }
@@ -226,11 +327,45 @@ export class PipelineView {
         ctx.fillStyle = '#f4efe3'; ctx.font = '8px DotGothic16, monospace';
         ctx.fillText(b.label, b.x + 3, top + 10);
         this.drawStocks(cid, b.x + 2, top + h - 12);
+        // 指示済み✓バッジ
+        if (this.mapMode && this.badges.ordered.has(cid)) {
+          ctx.fillStyle = '#ffd24a';
+          ctx.fillText('✓', b.x + b.w - 9, top + 10);
+        }
       }
       // 市場（右端）
       ctx.fillStyle = '#a97b4b'; ctx.fillRect(302, WOOL_ROAD_Y - 44, 16, MEAT_ROAD_Y - WOOL_ROAD_Y + 28);
       ctx.fillStyle = '#f4efe3';
       ctx.fillText('市', 306, WOOL_ROAD_Y - 30); ctx.fillText('場', 306, WOOL_ROAD_Y - 18);
+
+      // ロジ車庫（残りトラック）
+      ctx.fillStyle = '#6b7280'; ctx.fillRect(DEPOT.x, DEPOT.y, DEPOT.w, DEPOT.h);
+      ctx.fillStyle = '#4b5563'; ctx.fillRect(DEPOT.x, DEPOT.y - 5, DEPOT.w, 5);
+      ctx.fillStyle = '#f4efe3'; ctx.font = '8px DotGothic16, monospace';
+      ctx.fillText('🚚ロジ', DEPOT.x + 3, DEPOT.y + 9);
+      for (let i = 0; i < this.badges.trucksLeft; i++) {
+        drawSprite(ctx, TRUCK, DEPOT.x + 2 + (i % 2) * 14 - 4, DEPOT.y + 10 + Math.floor(i / 2) * 8, 0.5);
+      }
+      if (this.mapMode && this.badges.ordered.has('logi')) {
+        ctx.fillStyle = '#ffd24a';
+        ctx.fillText('✓', DEPOT.x + DEPOT.w - 9, DEPOT.y + 9);
+      }
+
+      // 配車済みトラック（各区間の始点に停車）
+      if (this.mapMode) {
+        for (const [route, n] of Object.entries(this.badges.trucks) as [RouteId, number][]) {
+          if (!n) continue;
+          const geo = ROUTE_GEO[route];
+          const y = (geo.lane === 'wool' ? WOOL_ROAD_Y : MEAT_ROAD_Y) - 15;
+          for (let i = 0; i < Math.min(n, 3); i++) {
+            drawSprite(ctx, TRUCK, geo.from + 6 + i * 8, y, 1);
+          }
+          if (n > 1) {
+            ctx.fillStyle = '#ffd24a'; ctx.font = '8px DotGothic16, monospace';
+            ctx.fillText(`x${n}`, geo.from + 30, y + 8);
+          }
+        }
+      }
     }
 
     // 羊
@@ -240,6 +375,10 @@ export class PipelineView {
       const flip = s.dir < 0;
       const spr: Sprite = s.kind === 'baby' ? LAMB : s.kind === 'wool' ? (f ? SHEEP_A : SHEEP_B) : (f ? SHORN_A : SHORN_B);
       drawSprite(this.ctx, spr, s.x, s.y, 1, flip);
+      if (s.preview) {
+        ctx.font = '8px sans-serif';
+        ctx.fillText('✂️', s.x + 4, s.y - 2);
+      }
     }
 
     // フロー中のトラック
