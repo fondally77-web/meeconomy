@@ -18,12 +18,16 @@ import type {
 } from '../../game/types.js';
 import { balancedBot } from '../../../sim/bots.js';
 import { PipelineView, CW, CH, type Overlay } from './pipeline.js';
+import { YARNROLL, MEATBOX, goodsSprite } from './sprites.js';
 import { SE, unlockAudio, isSeOn, setSeOn } from './se.js';
 import {
   MONTH_LABELS, EVENT_NAMES, RECIPE_NAMES, COMPANY_NAMES, RANK_COMMENTS,
 } from './labels.js';
 
 const fmt = (v: number) => Math.round(v).toLocaleString('ja-JP');
+
+const TRUCK_PRICE = 8_000;   // 増車費用（暫定バランス。ラボ強化はP5で正式化）
+const TRUCK_MAX = 8;
 
 function emptyOrders(): MonthlyOrders {
   return {
@@ -45,6 +49,8 @@ export class App {
   private eventId: EventId = 'none';
   private directMeat = 0;                // 直販に取り分けたラム肉
   private meatAtSplit = 0;               // 直販比率の分母（と畜後のラム肉量）
+  private doSpin: (() => void) | null = null;      // 作業場シーンのcanvasタップ用
+  private doSlaughter: (() => void) | null = null;
   private feed: string[] = [];
   private unread = 0;
   private view: PipelineView;
@@ -101,6 +107,10 @@ export class App {
         this.im.shipWait++;
         this.sync();
         this.updateFarmCounts();
+      },
+      onWorkTap: (kind) => {
+        if (kind === 'spin') this.doSpin?.();
+        else this.doSlaughter?.();
       },
       onTap: (id) => {
         const name = COMPANY_NAMES[id] ?? id;
@@ -214,13 +224,14 @@ export class App {
 
   // ── ①ファーム ──
   private stageFarm(): void {
+    this.view.setScene('farm');
     this.view.setTool('shear');
     const s = this.s;
     const room = Math.max(0, s.flock.capacity - totalSheep(s.flock));
     const eventNote = this.eventId !== 'none' ? `<div class="note event">${EVENT_NAMES[this.eventId]}</div>` : '';
     this.panel.innerHTML = `
       <div class="tkwin stageWin">
-        <div class="secTitle">① 🐑ファームのお仕事 <small>${MONTH_LABELS[s.month]}</small></div>
+        <div class="secTitle">① 🐑ファームのお仕事 <small>${MONTH_LABELS[s.month]}・🚚${s.logi.trucks}台</small></div>
         ${eventNote}
         <div class="toolRow" id="toolRow">
           <button id="toolShear" class="on">✂️ 毛を刈る</button>
@@ -231,6 +242,11 @@ export class App {
           <span class="lbl">子羊を買う <small>${fmt(LAMB_PRICE)}G/頭</small></span>
           <button class="mini" data-d="-1">−</button><b class="val">0</b><button class="mini" data-d="1">＋</button>
           <span class="hint">空き${room}</span>
+        </div>
+        <div class="step" data-key="truck">
+          <span class="lbl">🚚 トラック増車 <small>${fmt(TRUCK_PRICE)}G/台</small></span>
+          <button class="mini" data-d="1" id="buyTruck">＋</button>
+          <span class="hint" id="truckHint">今${s.logi.trucks}台</span>
         </div>
         <div class="btnRow">
           <button id="omakase">🤖今月おまかせ</button>
@@ -264,6 +280,21 @@ export class App {
       shipBtn.classList.add('on'); shearBtn.classList.remove('on');
       this.texel('🔪モード。タップした羊は乗り場へ歩いていきます');
     });
+    this.panel.querySelector('#buyTruck')!.addEventListener('click', () => {
+      unlockAudio();
+      if (this.s.logi.trucks >= TRUCK_MAX) { SE.deny(); this.texel(`車庫がいっぱい（最大${TRUCK_MAX}台）`); return; }
+      if (this.s.cash < TRUCK_PRICE) { SE.deny(); this.texel('現金が足りません。まず売上を…'); return; }
+      this.s.cash -= TRUCK_PRICE;
+      this.s.logi.trucks++;
+      this.pool++;
+      this.view.setTrucksLeft(this.pool);
+      this.renderHud();
+      SE.buy();
+      this.pushFeed(`🚚 トラックを増車（-${fmt(TRUCK_PRICE)}G・計${this.s.logi.trucks}台）`);
+      this.texel(`🚚が${this.s.logi.trucks}台に！これで積み残しが減ります`);
+      const hint = this.panel.querySelector('#truckHint');
+      if (hint) hint.textContent = `今${this.s.logi.trucks}台`;
+    });
     this.panel.querySelector('#omakase')!.addEventListener('click', () => {
       unlockAudio(); SE.buy();
       this.runOmakase();
@@ -284,6 +315,7 @@ export class App {
   // ── ②集荷（ファーム→ウール/ミート） ──
   private stageTransportA(): void {
     this.view.setTool(null);
+    this.view.setScene('map');
     this.panel.innerHTML = `<div class="tkwin flowNote">🚚 集荷中…</div>`;
     const mvW = this.alloc('farm-wool', this.im.farmWool);
     const mvS = this.alloc('farm-meat', this.im.shipWait);
@@ -307,6 +339,7 @@ export class App {
 
   // ── ③しこみ（紡績・と畜） ──
   private stageWork(leftovers: string[] = []): void {
+    this.view.setScene('work');
     const s = this.s;
     const woolCap = s.companies.wool.capacity;
     const meatCap = s.companies.meat.capacity;
@@ -314,7 +347,7 @@ export class App {
     const canSl = this.im.meatSheep > 0 && this.draft.slaughterQty < meatCap;
     this.panel.innerHTML = `
       <div class="tkwin stageWin">
-        <div class="secTitle">② しこみのお仕事 <small>🧶ウール社・🥩ミート社</small></div>
+        <div class="secTitle">② しこみのお仕事 <small>画面タップでも作業できます</small></div>
         <div class="workRow">
           <button id="spinBtn" ${canSpin ? '' : 'disabled'}>🧶 紡績する<br><small>羊毛${this.im.woolWool}袋 → 糸${YARN_PER_WOOL}巻（あと${woolCap - this.draft.spinQty}回）</small></button>
           <button id="spinAll" class="mini wide" ${canSpin ? '' : 'disabled'}>まとめて</button>
@@ -332,29 +365,35 @@ export class App {
         <div class="btnRow"><button id="nextStage" class="primary">🚚 加工場へはこぶ ▶</button></div>
       </div>`;
     if (leftovers.length > 0) {
-      this.texel(`🚚が足りず ${leftovers.join('・')} は来月まで待機。トラック強化はラボ（P5）で`);
+      this.texel(`🚚が足りず ${leftovers.join('・')} は来月まで待機。ファーム画面で増車できます（${fmt(TRUCK_PRICE)}G）`);
     } else {
-      this.texel('タップで1回ずつ加工。あなたが刈った毛が、糸に変わります');
+      this.texel('画面かボタンをタップで1回ずつ加工。あなたが刈った毛が、糸に変わります');
     }
 
     const spin = () => {
-      if (this.im.woolWool <= 0 || this.draft.spinQty >= woolCap) return false;
+      if (this.im.woolWool <= 0) { SE.deny(); this.texel('羊毛がありません'); return false; }
+      if (this.draft.spinQty >= woolCap) { SE.deny(); this.texel(`紡績は月${woolCap}袋まで（強化はラボ／P5）`); return false; }
       this.draft.spinQty++;
       this.im.woolWool--;
       this.im.woolYarn += YARN_PER_WOOL;
       SE.pop();
-      this.popText(160, 116, `🧶x${YARN_PER_WOOL}`, '#9fd0ff');
+      this.view.craftPop('left', YARNROLL);
+      this.popText(76, 66, `🧶x${YARN_PER_WOOL}`, '#9fd0ff');
       return true;
     };
     const slaughter = () => {
-      if (this.im.meatSheep <= 0 || this.draft.slaughterQty >= meatCap) return false;
+      if (this.im.meatSheep <= 0) { SE.deny(); this.texel('と畜する羊がいません'); return false; }
+      if (this.draft.slaughterQty >= meatCap) { SE.deny(); this.texel(`と畜は月${meatCap}頭まで（強化はラボ／P5）`); return false; }
       this.draft.slaughterQty++;
       this.im.meatSheep--;
       this.im.meatMeat += MEAT_PER_SHEEP;
       SE.pop();
-      this.popText(160, 180, `🥩x${MEAT_PER_SHEEP}`, '#ff9c9c');
+      this.view.craftPop('right', MEATBOX);
+      this.popText(236, 66, `🥩x${MEAT_PER_SHEEP}`, '#ff9c9c');
       return true;
     };
+    this.doSpin = () => { if (spin()) { this.sync(); this.stageWork(); } };
+    this.doSlaughter = () => { if (slaughter()) { this.sync(); this.stageWork(); } };
     const after = () => { this.sync(); this.stageWork(); };
     this.panel.querySelector('#spinBtn')?.addEventListener('click', () => { unlockAudio(); if (spin()) after(); });
     this.panel.querySelector('#slBtn')?.addEventListener('click', () => { unlockAudio(); if (slaughter()) after(); });
@@ -380,12 +419,15 @@ export class App {
     });
     this.panel.querySelector('#nextStage')!.addEventListener('click', () => {
       unlockAudio(); SE.buy();
+      this.doSpin = null;
+      this.doSlaughter = null;
       this.stageTransportB();
     });
   }
 
   // ── ④配達（糸→アパレル・肉→デリカ） ──
   private stageTransportB(): void {
+    this.view.setScene('map');
     this.meatAtSplit = this.im.meatMeat;
     this.panel.innerHTML = `<div class="tkwin flowNote">🚚 配達中…</div>`;
     const mvY = this.alloc('wool-apparel', this.im.woolYarn);
@@ -411,6 +453,7 @@ export class App {
 
   // ── ⑤加工（レシピ） ──
   private stageCraft(leftovers: string[] = []): void {
+    this.view.setScene('craft');
     const s = this.s;
     const aCap = s.companies.apparel.capacity;
     const dCap = s.companies.delica.capacity;
@@ -433,7 +476,7 @@ export class App {
         <div class="btnRow"><button id="nextStage" class="primary">🚚 店にならべる ▶</button></div>
       </div>`;
     if (leftovers.length > 0) {
-      this.texel(`🚚が足りず ${leftovers.join('・')} は届きませんでした`);
+      this.texel(`🚚が足りず ${leftovers.join('・')} は届きませんでした。来月は増車を検討しましょう`);
     } else if (this.im.apparelYarn > 0 || this.im.delicaMeat > 0) {
       this.texel('レシピをタップして1つずつ加工。加工するほど高く売れます');
     } else {
@@ -451,14 +494,16 @@ export class App {
           this.im.apparelGoods++;
           this.draft.apparelRecipes[rid as keyof typeof this.draft.apparelRecipes] =
             (this.draft.apparelRecipes[rid as keyof typeof this.draft.apparelRecipes] ?? 0) + 1;
-          this.popText(210, 116, `👕${RECIPE_NAMES[rid]}！`, '#f3b0dd');
+          this.view.craftPop('left', goodsSprite(rid));
+          this.popText(76, 66, `👕${RECIPE_NAMES[rid]}！`, '#f3b0dd');
         } else {
           if (this.im.delicaMeat < def.inputQty) return;
           this.im.delicaMeat -= def.inputQty;
           this.im.delicaGoods++;
           this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] =
             (this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] ?? 0) + 1;
-          this.popText(210, 180, `🍖${RECIPE_NAMES[rid]}！`, '#ffc98a');
+          this.view.craftPop('right', goodsSprite(rid));
+          this.popText(236, 66, `🍖${RECIPE_NAMES[rid]}！`, '#ffc98a');
         }
         SE.pop();
         this.sync();
@@ -473,6 +518,7 @@ export class App {
 
   // ── ⑥出荷（→セールス） ──
   private stageTransportC(): void {
+    this.view.setScene('map');
     this.panel.innerHTML = `<div class="tkwin flowNote">🚚 店へ出荷中…</div>`;
     const mvA = this.alloc('apparel-sales', this.im.apparelGoods);
     const mvD = this.alloc('delica-sales', this.im.delicaGoods);
@@ -497,6 +543,7 @@ export class App {
 
   // ── ⑦開店 ──
   private stageMarket(leftovers: string[] = []): void {
+    this.view.setScene('market');
     const d = this.draft;
     this.panel.innerHTML = `
       <div class="tkwin stageWin">
@@ -510,7 +557,7 @@ export class App {
         <div class="btnRow"><button id="openShop" class="primary">🔔 開店する！</button></div>
       </div>`;
     this.texel(leftovers.length > 0
-      ? `🚚不足で ${leftovers.join('・')} は店に届かず…値付けをどうぞ`
+      ? `🚚不足で ${leftovers.join('・')} は店に届かず…（増車は${fmt(TRUCK_PRICE)}G）。値付けをどうぞ`
       : 'いよいよ開店。強気で儲けるか、弱気で数をさばくか');
     this.panel.querySelector('#stance')!.querySelectorAll('button').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -529,6 +576,7 @@ export class App {
   /** エンジン実行→売上演出→月末リザルト */
   private runEngine(): void {
     this.view.setTool(null);
+    this.view.setScene('market');
     this.panel.innerHTML = `<div class="tkwin flowNote">🏪 えいぎょう中…（タップでスキップ）</div>`;
     const { next, result } = simulateMonth(this.s, this.draft);
     this.view.startMarket(result, () => this.monthResult(next, result));
@@ -545,6 +593,7 @@ export class App {
   // ── 月末リザルト ──
   private monthResult(next: RunState, r: MonthlyResult): void {
     this.s = next;
+    this.view.setScene('map');
     this.view.setOverlay(null);
     this.view.setState(next);
     this.view.setTrucksLeft(next.logi.trucks);
