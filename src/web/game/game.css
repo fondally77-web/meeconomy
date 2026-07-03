@@ -72,6 +72,15 @@ canvas {
 /* パネル（指示・リザルト） */
 #panel { flex: 1; }
 .mapHint .hintLine { font-size: 13px; opacity: .9; }
+.toolRow { display: flex; gap: 8px; margin: 6px 0; }
+.toolRow button { flex: 1; padding: 10px 4px; }
+.note.event { color: var(--gold); }
+.workRow { display: flex; gap: 8px; align-items: stretch; margin: 6px 0; }
+.workRow button:first-child { flex: 1; padding: 8px 6px; line-height: 1.3; }
+.workRow button small, .craftRow button small { font-size: 10px; opacity: .8; }
+.craftRow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 4px 0 8px; }
+.craftRow button { padding: 8px 4px; line-height: 1.3; }
+button:disabled { opacity: .4; cursor: default; }
 .note { font-size: 12px; margin: 4px 0; opacity: .9; }
 .note.dim { opacity: .6; font-size: 11px; }
 .closeBtn { float: right; font-size: 11px; }
