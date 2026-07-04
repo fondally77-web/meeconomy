@@ -26,7 +26,7 @@ import {
 
 const fmt = (v: number) => Math.round(v).toLocaleString('ja-JP');
 
-const TRUCK_PRICE = 8_000;   // 増車費用（暫定バランス。ラボ強化はP5で正式化）
+const TRUCK_PRICE = 5_000;   // 増車費用（暫定バランス。ラボ強化はP5で正式化）
 const TRUCK_MAX = 8;
 
 function emptyOrders(): MonthlyOrders {
@@ -165,6 +165,10 @@ export class App {
 
   private sync(): void { this.view.setOverlay(this.im); }
 
+  private cumProfit(): number {
+    return this.s.history.reduce((t, m) => t + m.consolidatedProfit, 0);
+  }
+
   private shearCap(): number {
     return SHEAR_CAPACITY * (this.eventId === 'shearFes' ? 2 : 1);
   }
@@ -237,7 +241,7 @@ export class App {
           <button id="toolShear" class="on">✂️ 毛を刈る</button>
           <button id="toolShip">🔪 出荷する</button>
         </div>
-        <div class="note">道具を選んで<b>羊をタップ</b>！　✂️<span id="cntShear">0</span>/${this.shearCap()}頭　🔪<span id="cntShip">0</span>頭</div>
+        <div class="note">道具を選んで<b>羊をタップ</b>！　✂️<span id="cntShear">0</span>/${this.shearCap()}頭　🔪<span id="cntShip">0</span>頭　<span id="truckNeed"></span></div>
         <div class="step" data-key="buy">
           <span class="lbl">子羊を買う <small>${fmt(LAMB_PRICE)}G/頭</small></span>
           <button class="mini" data-d="-1">−</button><b class="val">0</b><button class="mini" data-d="1">＋</button>
@@ -253,9 +257,16 @@ export class App {
           <button id="nextStage" class="primary">🚚 集荷にすすむ ▶</button>
         </div>
       </div>`;
+    const m = s.month;
+    const strategy = m >= 3 && m <= 5
+      ? '☀️<b>夏は肉の季節</b>。🔪出荷多め・毛刈りは休みが吉。両方やるとトラックが足りません'
+      : m >= 6 && m <= 8
+        ? '❄️<b>冬物本番</b>。✂️毛刈りに集中してマフラー・セーターを！'
+        : '✂️は2ヶ月で戻る資産、🔪は即現金。今月は片方に絞るとトラックが節約できます';
     this.texel(this.eventId === 'shearFes'
       ? '毛刈りフェス！今月はタダで倍まで刈れます✂️✂️'
-      : '✂️で刈ると毛袋がポン。🔪で出荷すると現金は速いけど、羊はいなくなります');
+      : strategy);
+    this.updateFarmCounts();
 
     const buyStep = this.panel.querySelector('.step[data-key="buy"]')!;
     buyStep.querySelectorAll<HTMLButtonElement>('button.mini').forEach(btn => {
@@ -280,21 +291,7 @@ export class App {
       shipBtn.classList.add('on'); shearBtn.classList.remove('on');
       this.texel('🔪モード。タップした羊は乗り場へ歩いていきます');
     });
-    this.panel.querySelector('#buyTruck')!.addEventListener('click', () => {
-      unlockAudio();
-      if (this.s.logi.trucks >= TRUCK_MAX) { SE.deny(); this.texel(`車庫がいっぱい（最大${TRUCK_MAX}台）`); return; }
-      if (this.s.cash < TRUCK_PRICE) { SE.deny(); this.texel('現金が足りません。まず売上を…'); return; }
-      this.s.cash -= TRUCK_PRICE;
-      this.s.logi.trucks++;
-      this.pool++;
-      this.view.setTrucksLeft(this.pool);
-      this.renderHud();
-      SE.buy();
-      this.pushFeed(`🚚 トラックを増車（-${fmt(TRUCK_PRICE)}G・計${this.s.logi.trucks}台）`);
-      this.texel(`🚚が${this.s.logi.trucks}台に！これで積み残しが減ります`);
-      const hint = this.panel.querySelector('#truckHint');
-      if (hint) hint.textContent = `今${this.s.logi.trucks}台`;
-    });
+    this.panel.querySelector('#buyTruck')!.addEventListener('click', () => this.buyTruck());
     this.panel.querySelector('#omakase')!.addEventListener('click', () => {
       unlockAudio(); SE.buy();
       this.runOmakase();
@@ -305,11 +302,52 @@ export class App {
     });
   }
 
+  /** 増車（どのステージのパネルからでも呼べる） */
+  private buyTruck(): boolean {
+    unlockAudio();
+    if (this.s.logi.trucks >= TRUCK_MAX) { SE.deny(); this.texel(`車庫がいっぱい（最大${TRUCK_MAX}台）`); return false; }
+    if (this.s.cash < TRUCK_PRICE) { SE.deny(); this.texel('現金が足りません。まず売上を…'); return false; }
+    this.s.cash -= TRUCK_PRICE;
+    this.s.logi.trucks++;
+    this.pool++;
+    this.view.setTrucksLeft(this.pool);
+    this.renderHud();
+    SE.buy();
+    this.pushFeed(`🚚 トラックを増車（-${fmt(TRUCK_PRICE)}G・計${this.s.logi.trucks}台）`);
+    this.texel(`🚚が${this.s.logi.trucks}台に！これで積み残しが減ります`);
+    const hint = this.panel.querySelector('#truckHint');
+    if (hint) hint.textContent = `今${this.s.logi.trucks}台`;
+    this.updateFarmCounts();
+    return true;
+  }
+
+  /** 積み残しパネル用の増車ボタンHTML＋バインド */
+  private truckOfferHtml(leftovers: string[]): string {
+    if (leftovers.length === 0 || this.s.logi.trucks >= TRUCK_MAX) return '';
+    return `<div class="workRow"><button id="buyTruckNow">🚚 いま増車する <small>${fmt(TRUCK_PRICE)}G・今月から効く</small></button></div>`;
+  }
+
+  private bindTruckOffer(rerender: () => void): void {
+    this.panel.querySelector('#buyTruckNow')?.addEventListener('click', () => {
+      if (this.buyTruck()) rerender();
+    });
+  }
+
   private updateFarmCounts(): void {
     const cs = this.panel.querySelector('#cntShear');
     const cp = this.panel.querySelector('#cntShip');
     if (cs) cs.textContent = String(this.draft.sheepToShear);
     if (cp) cp.textContent = String(this.draft.sheepToShip);
+    const tn = this.panel.querySelector('#truckNeed');
+    if (tn) {
+      // ざっくり必要台数：集荷（毛・羊）＋糸→アパレル＋店行きの見込み
+      const load = this.loadCap();
+      const yarn = Math.min(this.draft.sheepToShear + this.im.farmWool, this.s.companies.wool.capacity) * YARN_PER_WOOL;
+      const need = Math.ceil(this.im.farmWool / load) + Math.ceil(this.im.shipWait / load)
+        + Math.ceil(yarn / load) + (yarn > 0 ? 1 : 0) + (this.im.shipWait > 0 ? 1 : 0);
+      tn.textContent = `見込み🚚${need}台/今${this.s.logi.trucks}台`;
+      (tn as HTMLElement).style.color = need > this.s.logi.trucks ? '#ff9c9c' : '#9fe8a8';
+    }
   }
 
   // ── ②集荷（ファーム→ウール/ミート） ──
@@ -362,10 +400,12 @@ export class App {
           <button class="mini" data-d="-1">−</button><b class="val">${this.directMeat}</b><button class="mini" data-d="1">＋</button>
           <span class="hint">在庫${this.im.meatMeat}箱</span>
         </div>` : ''}
+        ${this.truckOfferHtml(leftovers)}
         <div class="btnRow"><button id="nextStage" class="primary">🚚 加工場へはこぶ ▶</button></div>
       </div>`;
+    this.bindTruckOffer(() => this.stageWork(leftovers));
     if (leftovers.length > 0) {
-      this.texel(`🚚が足りず ${leftovers.join('・')} は来月まで待機。ファーム画面で増車できます（${fmt(TRUCK_PRICE)}G）`);
+      this.texel(`🚚が足りず ${leftovers.join('・')} は来月まで待機。増車すれば次の便から積めます`);
     } else {
       this.texel('画面かボタンをタップで1回ずつ加工。あなたが刈った毛が、糸に変わります');
     }
@@ -473,10 +513,12 @@ export class App {
         <div class="craftRow">${APPAREL_RECIPES.map(r => recipeBtn(r, this.im.apparelYarn, aCap - aMade)).join('')}</div>
         <div class="note">🍖 ラム肉${this.im.delicaMeat}箱・のこり能力${dCap - dMade}箱</div>
         <div class="craftRow">${MEAT_RECIPES.map(r => recipeBtn(r, this.im.delicaMeat, dCap - dMade)).join('')}</div>
+        ${this.truckOfferHtml(leftovers)}
         <div class="btnRow"><button id="nextStage" class="primary">🚚 店にならべる ▶</button></div>
       </div>`;
+    this.bindTruckOffer(() => this.stageCraft(leftovers));
     if (leftovers.length > 0) {
-      this.texel(`🚚が足りず ${leftovers.join('・')} は届きませんでした。来月は増車を検討しましょう`);
+      this.texel(`🚚が足りず ${leftovers.join('・')} は届きませんでした。増車すれば次の便から積めます`);
     } else if (this.im.apparelYarn > 0 || this.im.delicaMeat > 0) {
       this.texel('レシピをタップして1つずつ加工。加工するほど高く売れます');
     } else {
@@ -620,6 +662,8 @@ export class App {
           「右のポケットから左のポケット」。れんけつでは消えます</div>
         <div class="cashRow">💰 現金 ${fmt(r.cashEnd)}G（収入${fmt(r.cashIn)}／支出${fmt(r.cashOut)}）
           ／ 販売${r.soldBoxes}箱${r.disposedBoxes > 0 ? `／<span class="minus">廃棄${r.disposedBoxes}箱</span>` : ''}</div>
+        <div class="cashRow">📈 年度累計 <b class="${this.cumProfit() >= 0 ? 'plus' : 'minus'}">${fmt(this.cumProfit())}G</b>
+          <small>（ランクBの目安：スコア20,000G〜）</small></div>
         <div class="btnRow"><button id="nextBtn" class="primary">${this.s.month >= 12 || this.s.bankrupt ? '📊 年度決算へ' : '▶ 次の月へ'}</button></div>
       </div>`;
     this.panel.querySelector('#whyBtn')!.addEventListener('click', () => {
