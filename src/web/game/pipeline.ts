@@ -160,6 +160,25 @@ export class PipelineView {
     }
   }
 
+  private shearFx(s: VisualSheep, onLand?: () => void): void {
+    const sx = this.farmX(s.x), sy = this.farmY(s.y);
+    s.kind = 'shorn'; s.shearedNow = true;
+    SE.shear(); setTimeout(() => SE.pop(), 90);
+    this.pop(sx + 16, sy - 12, 'ポンッ！', '#fff');
+    this.flys.push({
+      sprite: WOOLBAG, scene: 'farm', scale: 2,
+      sx: sx + 8, sy: sy - 6, tx: 36, ty: 196, t: 0,
+      onLand,
+    });
+  }
+
+  private shipFx(s: VisualSheep): void {
+    const sx = this.farmX(s.x), sy = this.farmY(s.y);
+    s.leaving = true; s.dir = 1; s.pause = 0;
+    SE.mee();
+    this.pop(sx + 16, sy - 10, '🔪出荷…', '#ff9c9c');
+  }
+
   private onSheepTap(s: VisualSheep): void {
     const sx = this.farmX(s.x), sy = this.farmY(s.y);
     if (this.tool === 'shear') {
@@ -170,22 +189,48 @@ export class PipelineView {
         return;
       }
       if (!this.handlers.canShear()) { SE.mee(); return; }
-      s.kind = 'shorn'; s.shearedNow = true;
-      SE.shear(); setTimeout(() => SE.pop(), 90);
-      this.pop(sx + 16, sy - 12, 'ポンッ！', '#fff');
-      this.flys.push({
-        sprite: WOOLBAG, scene: 'farm', scale: 2,
-        sx: sx + 8, sy: sy - 6, tx: 36, ty: 196, t: 0,
-        onLand: () => this.handlers.onSheared(),
-      });
+      this.shearFx(s, () => this.handlers.onSheared());
     } else if (this.tool === 'ship') {
       if (s.kind === 'baby') { SE.mee(); this.pop(sx + 16, sy - 10, 'めぇ！（まだ子羊）', '#ffd24a'); return; }
       if (!this.handlers.canShip()) { SE.mee(); return; }
-      s.leaving = true; s.dir = 1; s.pause = 0;
-      SE.mee();
-      this.pop(sx + 16, sy - 10, '🔪出荷…', '#ff9c9c');
+      this.shipFx(s);
       this.handlers.onShipped();
     }
+  }
+
+  /** おまかせ再生：1頭刈る（対象がいなければfalse） */
+  autoShearOne(onLand?: () => void): boolean {
+    const s = this.sheep.find(sp => sp.kind === 'wool' && !sp.leaving);
+    if (!s) return false;
+    this.shearFx(s, onLand);
+    return true;
+  }
+
+  /** おまかせ再生：1頭出荷（毛刈り済みを優先して残す挙動はエンジンと同じくcd優先） */
+  autoShipOne(): boolean {
+    const s = this.sheep.find(sp => !sp.leaving && sp.kind === 'shorn')
+      ?? this.sheep.find(sp => !sp.leaving && sp.kind === 'wool');
+    if (!s) return false;
+    this.shipFx(s);
+    return true;
+  }
+
+  /** 子羊を1頭ふやす／へらす（購入プレビュー） */
+  addLamb(): void {
+    SE.buy();
+    this.sheep.push({
+      x: PEN.x + 6 + Math.random() * (PEN.w - 28),
+      y: PEN.y + 14 + Math.random() * (PEN.h - 32),
+      dir: 1, walkT: Math.random() * 100, pause: 0,
+      kind: 'baby', shearedNow: false, leaving: false,
+    });
+    const last = this.sheep[this.sheep.length - 1];
+    this.pop(this.farmX(last.x) + 10, this.farmY(last.y) - 8, 'めぇ！', '#9fd0ff');
+  }
+
+  removeLamb(): void {
+    const idx = this.sheep.map(s => s.kind).lastIndexOf('baby');
+    if (idx >= 0) this.sheep.splice(idx, 1);
   }
 
   setState(s: RunState): void {

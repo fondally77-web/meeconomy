@@ -51,6 +51,8 @@ export class App {
   private meatAtSplit = 0;               // 直販比率の分母（と畜後のラム肉量）
   private doSpin: (() => void) | null = null;      // 作業場シーンのcanvasタップ用
   private doSlaughter: (() => void) | null = null;
+  private lambsLastMonth = 0;            // 先月買った子羊（今月「おとなに！」）
+  private autoSkip = false;              // おまかせ再生の早送り
   private feed: string[] = [];
   private unread = 0;
   private view: PipelineView;
@@ -267,14 +269,21 @@ export class App {
       ? '毛刈りフェス！今月はタダで倍まで刈れます✂️✂️'
       : strategy);
     this.updateFarmCounts();
+    if (this.lambsLastMonth > 0) {
+      this.popText(150, 110, `おとなに！×${this.lambsLastMonth}`, '#9fd0ff');
+      this.lambsLastMonth = 0;
+    }
 
     const buyStep = this.panel.querySelector('.step[data-key="buy"]')!;
     buyStep.querySelectorAll<HTMLButtonElement>('button.mini').forEach(btn => {
       btn.addEventListener('click', () => {
         unlockAudio(); SE.decide();
-        const v = Math.max(0, Math.min(room, this.draft.lambsToBuy + Number(btn.dataset.d)));
+        const prev = this.draft.lambsToBuy;
+        const v = Math.max(0, Math.min(room, prev + Number(btn.dataset.d)));
         this.draft.lambsToBuy = v;
         buyStep.querySelector('.val')!.textContent = String(v);
+        if (v > prev) this.view.addLamb();      // 子羊がその場でやってくる
+        else if (v < prev) this.view.removeLamb();
       });
     });
     const shearBtn = this.panel.querySelector('#toolShear')!;
@@ -361,7 +370,7 @@ export class App {
     if (mvW < this.im.farmWool) leftovers.push(`羊毛${this.im.farmWool - mvW}袋`);
     if (mvS < this.im.shipWait) leftovers.push(`羊${this.im.shipWait - mvS}頭`);
     let waiting = 0;
-    const done = () => { if (--waiting <= 0) this.stageWork(leftovers); };
+    const done = () => { if (--waiting <= 0) this.enterWork(leftovers); };
     if (mvW > 0) {
       waiting++;
       this.im.farmWool -= mvW; this.sync();
@@ -372,7 +381,16 @@ export class App {
       this.im.shipWait -= mvS; this.sync();
       this.view.animateTransport('farm-meat', 'sheep', () => { this.im.meatSheep += mvS; this.sync(); done(); });
     }
-    if (waiting === 0) this.stageWork(leftovers);
+    if (waiting === 0) this.enterWork(leftovers);
+  }
+
+  /** しこみ工程に用がなければ飛ばす（輸送完了時の入口でだけ判定） */
+  private enterWork(leftovers: string[]): void {
+    if (this.im.woolWool === 0 && this.im.meatSheep === 0 && this.im.meatMeat === 0 && leftovers.length === 0) {
+      this.stageTransportB();
+      return;
+    }
+    this.stageWork(leftovers);
   }
 
   // ── ③しこみ（紡績・と畜） ──
@@ -477,7 +495,7 @@ export class App {
     if (mvY < this.im.woolYarn) leftovers.push(`糸${this.im.woolYarn - mvY}巻`);
     if (mvM < wantM) leftovers.push(`ラム肉${wantM - mvM}箱`);
     let waiting = 0;
-    const done = () => { if (--waiting <= 0) this.stageCraft(leftovers); };
+    const done = () => { if (--waiting <= 0) this.enterCraft(leftovers); };
     if (mvY > 0) {
       waiting++;
       this.im.woolYarn -= mvY; this.sync();
@@ -488,7 +506,16 @@ export class App {
       this.im.meatMeat -= mvM; this.sync();
       this.view.animateTransport('meat-delica', 'lambMeat', () => { this.im.delicaMeat += mvM; this.sync(); done(); });
     }
-    if (waiting === 0) this.stageCraft(leftovers);
+    if (waiting === 0) this.enterCraft(leftovers);
+  }
+
+  /** 加工工程に用がなければ飛ばす（輸送完了時の入口でだけ判定） */
+  private enterCraft(leftovers: string[]): void {
+    if (this.im.apparelYarn === 0 && this.im.delicaMeat === 0 && leftovers.length === 0) {
+      this.stageTransportC();
+      return;
+    }
+    this.stageCraft(leftovers);
   }
 
   // ── ⑤加工（レシピ） ──
@@ -619,16 +646,153 @@ export class App {
   private runEngine(): void {
     this.view.setTool(null);
     this.view.setScene('market');
+    this.lambsLastMonth = this.draft.lambsToBuy;
     this.panel.innerHTML = `<div class="tkwin flowNote">🏪 えいぎょう中…（タップでスキップ）</div>`;
     const { next, result } = simulateMonth(this.s, this.draft);
     this.view.startMarket(result, () => this.monthResult(next, result));
   }
 
-  /** 🤖おまかせ：balancedボットが全工程を代行 */
-  private runOmakase(): void {
+  private wait(ms: number): Promise<void> {
+    return new Promise(res => setTimeout(res, this.autoSkip ? 0 : ms));
+  }
+
+  private autoTransport(
+    route: RouteId, goods: Parameters<PipelineView['animateTransport']>[1],
+    qty: number, sub: () => void, add: () => void,
+  ): Promise<void> {
+    return new Promise(res => {
+      if (qty <= 0) { res(); return; }
+      sub(); this.sync();
+      if (this.autoSkip) { add(); this.sync(); res(); return; }
+      this.view.animateTransport(route, goods, () => { add(); this.sync(); res(); });
+    });
+  }
+
+  /** 🤖おまかせ：テクセルが全工程を目の前で代行（⏩で早送り） */
+  private async runOmakase(): Promise<void> {
+    const o = balancedBot(this.s, SHEAR_CAPACITY);
+    const d = this.draft;
+    const im = this.im;
+    this.autoSkip = false;
     this.view.setTool(null);
-    this.draft = balancedBot(this.s, SHEAR_CAPACITY);
-    this.texel('テクセルにおまかせ！季節に合わせて全部やっておきますね');
+    this.panel.innerHTML = `
+      <div class="tkwin flowNote">🤖 テクセルが作業中…
+        <div class="btnRow"><button id="skipAuto">⏩ 早送り</button></div>
+      </div>`;
+    this.panel.querySelector('#skipAuto')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.autoSkip = true;
+    });
+
+    // ①ファーム
+    this.view.setScene('farm');
+    this.texel('🤖「まず牧場。季節に合わせてお世話しますね」');
+    for (let i = 0; i < o.lambsToBuy; i++) {
+      this.view.addLamb();
+      d.lambsToBuy++;
+      await this.wait(220);
+    }
+    for (let i = 0; i < o.sheepToShear; i++) {
+      if (!this.view.autoShearOne()) break;
+      d.sheepToShear++;
+      im.farmWool++;
+      this.sync();
+      await this.wait(260);
+    }
+    for (let i = 0; i < o.sheepToShip; i++) {
+      if (!this.view.autoShipOne()) break;
+      d.sheepToShip++;
+      im.shipWait++;
+      this.sync();
+      await this.wait(220);
+    }
+    await this.wait(450);
+
+    // ②集荷
+    this.view.setScene('map');
+    this.texel('🤖「集荷トラック、しゅっぱーつ」');
+    const mvW = this.alloc('farm-wool', im.farmWool);
+    const mvS = this.alloc('farm-meat', im.shipWait);
+    await Promise.all([
+      this.autoTransport('farm-wool', 'wool', mvW, () => { im.farmWool -= mvW; }, () => { im.woolWool += mvW; }),
+      this.autoTransport('farm-meat', 'sheep', mvS, () => { im.shipWait -= mvS; }, () => { im.meatSheep += mvS; }),
+    ]);
+
+    // ③しこみ
+    if (im.woolWool > 0 || im.meatSheep > 0) {
+      this.view.setScene('work');
+      this.texel('🤖「紡績と、と畜です。えいっ」');
+      const spinN = Math.min(o.spinQty, this.s.companies.wool.capacity, im.woolWool);
+      for (let i = 0; i < spinN; i++) {
+        d.spinQty++; im.woolWool--; im.woolYarn += YARN_PER_WOOL;
+        SE.pop(); this.view.craftPop('left', YARNROLL); this.sync();
+        await this.wait(200);
+      }
+      const slN = Math.min(o.slaughterQty, this.s.companies.meat.capacity, im.meatSheep);
+      for (let i = 0; i < slN; i++) {
+        d.slaughterQty++; im.meatSheep--; im.meatMeat += MEAT_PER_SHEEP;
+        SE.pop(); this.view.craftPop('right', MEATBOX); this.sync();
+        await this.wait(200);
+      }
+    }
+    this.meatAtSplit = im.meatMeat;
+    this.directMeat = Math.round(this.meatAtSplit * o.meatDirectRatio);
+
+    // ④配達
+    this.view.setScene('map');
+    const mvY = this.alloc('wool-apparel', im.woolYarn);
+    const wantM = Math.max(0, im.meatMeat - this.directMeat);
+    const mvM = this.alloc('meat-delica', wantM);
+    await Promise.all([
+      this.autoTransport('wool-apparel', 'yarn', mvY, () => { im.woolYarn -= mvY; }, () => { im.apparelYarn += mvY; }),
+      this.autoTransport('meat-delica', 'lambMeat', mvM, () => { im.meatMeat -= mvM; }, () => { im.delicaMeat += mvM; }),
+    ]);
+
+    // ⑤加工
+    if (im.apparelYarn > 0 || im.delicaMeat > 0) {
+      this.view.setScene('craft');
+      this.texel('🤖「加工タイム。今日のレシピはこちら」');
+      const aCap = this.s.companies.apparel.capacity;
+      const dCap = this.s.companies.delica.capacity;
+      let aMade = 0, dMade = 0;
+      for (const [rid, n] of Object.entries(o.apparelRecipes) as [RecipeId, number][]) {
+        const def = RECIPES[rid];
+        for (let i = 0; i < (n ?? 0) && aMade < aCap && im.apparelYarn >= def.inputQty; i++) {
+          im.apparelYarn -= def.inputQty; im.apparelGoods++; aMade++;
+          d.apparelRecipes[rid as keyof typeof d.apparelRecipes] =
+            (d.apparelRecipes[rid as keyof typeof d.apparelRecipes] ?? 0) + 1;
+          SE.pop(); this.view.craftPop('left', goodsSprite(rid)); this.sync();
+          await this.wait(220);
+        }
+      }
+      for (const [rid, n] of Object.entries(o.meatRecipes) as [RecipeId, number][]) {
+        const def = RECIPES[rid];
+        for (let i = 0; i < (n ?? 0) && dMade < dCap && im.delicaMeat >= def.inputQty; i++) {
+          im.delicaMeat -= def.inputQty; im.delicaGoods++; dMade++;
+          d.meatRecipes[rid as keyof typeof d.meatRecipes] =
+            (d.meatRecipes[rid as keyof typeof d.meatRecipes] ?? 0) + 1;
+          SE.pop(); this.view.craftPop('right', goodsSprite(rid)); this.sync();
+          await this.wait(220);
+        }
+      }
+    }
+
+    // ⑥出荷
+    this.view.setScene('map');
+    const mvA = this.alloc('apparel-sales', im.apparelGoods);
+    const mvD = this.alloc('delica-sales', im.delicaGoods);
+    const mvDM = this.alloc('meat-sales', Math.min(this.directMeat, im.meatMeat));
+    await Promise.all([
+      this.autoTransport('apparel-sales', 'muffler', mvA, () => { im.apparelGoods -= mvA; }, () => { im.salesBoxes += mvA; }),
+      this.autoTransport('delica-sales', 'genghis', mvD, () => { im.delicaGoods -= mvD; }, () => { im.salesBoxes += mvD; }),
+      this.autoTransport('meat-sales', 'lambMeat', mvDM, () => { im.meatMeat -= mvDM; }, () => { im.salesBoxes += mvDM; }),
+    ]);
+
+    // ⑦開店
+    d.priceStance = o.priceStance;
+    d.meatDirectRatio = this.meatAtSplit > 0 ? Math.min(1, this.directMeat / this.meatAtSplit) : 0;
+    this.texel('🤖「開店です！売上はいかに…」');
+    await this.wait(300);
     this.runEngine();
   }
 

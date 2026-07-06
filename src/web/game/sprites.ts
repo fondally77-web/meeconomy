@@ -149,6 +149,66 @@ export const DELICABOX: Sprite = [
   'oOOOOOOo',
   'oooooooo',
   '........'];
+// セーター（8x8）
+export const SWEATER: Sprite = [
+  '.aa..aa.',
+  'aAAAAAAa',
+  'aaAAAAaa',
+  '.aAWWAa.',
+  '.aAAAAa.',
+  '.aAWWAa.',
+  '.aAAAAa.',
+  '.aaaaaa.'];
+// ブランケット（8x8）
+export const BLANKET: Sprite = [
+  '........',
+  'tTTTTTTt',
+  'tWWWWWWt',
+  'tTTTTTTt',
+  'tWWWWWWt',
+  'tTTTTTTt',
+  'tttttttt',
+  '........'];
+// コート（8x8・高級）
+export const COAT_SP: Sprite = [
+  '.YY..YY.',
+  'FFFYYFFF',
+  'FFFFFFFF',
+  'FfFYYFfF',
+  'FfFFFFfF',
+  'FfFYYFfF',
+  'FFFFFFFF',
+  'ffffffff'];
+// ソーセージ（8x8）
+export const SAUSAGE: Sprite = [
+  '........',
+  '.rrrr...',
+  'rRRRRr..',
+  '.rrRRRr.',
+  '..rRRRRr',
+  '...rrrr.',
+  'W..W..W.',
+  '........'];
+// ラムカレー（8x8・レトルト箱）
+export const CURRY: Sprite = [
+  'oooooooo',
+  'oWWWWWWo',
+  'oWOyyOWo',
+  'oWyRRyWo',
+  'oWyRRyWo',
+  'oWOyyOWo',
+  'oWWWWWWo',
+  'oooooooo'];
+// ラムチョップ（8x8）
+export const CHOP: Sprite = [
+  '.....WW.',
+  '....WW..',
+  '...RR...',
+  '..RRRR..',
+  '.RRRRRR.',
+  '.RRrrRR.',
+  '.rRRRRr.',
+  '..rrrr..'];
 // トラック（26x14）右向き
 export const TRUCK: Sprite = [
   '..........................',
@@ -177,14 +237,21 @@ export const COIN: Sprite = [
   '..YYYY..'];
 
 import type { GoodsId } from '../../game/types.js';
-/** 商品→箱スプライト */
+/** 商品→スプライト（商品ごとに見た目が違う） */
 export function goodsSprite(goodsId: GoodsId): Sprite {
   switch (goodsId) {
     case 'wool': return WOOLBAG;
     case 'yarn': return YARNROLL;
     case 'sheep': return LAMB;
     case 'lambMeat': return MEATBOX;
-    case 'genghis': case 'lambSausage': case 'lambCurry': case 'lambChop': return DELICABOX;
+    case 'genghis': return DELICABOX;
+    case 'lambSausage': return SAUSAGE;
+    case 'lambCurry': return CURRY;
+    case 'lambChop': return CHOP;
+    case 'muffler': return APPARELBOX;
+    case 'sweater': return SWEATER;
+    case 'blanket': return BLANKET;
+    case 'coat': return COAT_SP;
     default: return APPARELBOX;
   }
 }
