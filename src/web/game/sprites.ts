@@ -19,6 +19,11 @@ export const PAL: Record<string, string | null> = {
 
 export type Sprite = string[];
 
+/** パレット文字を置き換えた色違いスプライトを作る */
+export function reskin(rows: Sprite, map: Record<string, string>): Sprite {
+  return rows.map(r => r.split('').map(c => map[c] ?? c).join(''));
+}
+
 export function drawSprite(
   ctx: CanvasRenderingContext2D, rows: Sprite, x: number, y: number, scale = 1, flip = false,
 ): void {
@@ -225,6 +230,12 @@ export const TRUCK: Sprite = [
   '..........................',
   '..........................',
   '..........................'];
+// 金色の羊（もふもふ部分が金色）
+export const GOLD_SHEEP_A = reskin(SHEEP_A, { W: 'Y', w: 'y' });
+export const GOLD_SHEEP_B = reskin(SHEEP_B, { W: 'Y', w: 'y' });
+export const GOLD_LAMB = reskin(LAMB, { W: 'Y', w: 'y' });
+export const GOLD_WOOLBAG = reskin(WOOLBAG, { D: 'Y', d: 'y' });
+
 // お客さん（6x10）
 export const CUSTOMER: Sprite = [
   '..KK..',

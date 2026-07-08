@@ -3,6 +3,7 @@ import type { GoodsId, MonthlyResult, RouteId, RunState } from '../../game/types
 import {
   drawSprite, goodsSprite, PAL,
   SHEEP_A, SHEEP_B, SHORN_A, SHORN_B, LAMB, TRUCK, COIN, CUSTOMER,
+  GOLD_SHEEP_A, GOLD_SHEEP_B, GOLD_LAMB, GOLD_WOOLBAG,
   WOOLBAG, YARNROLL, MEATBOX, type Sprite,
 } from './sprites.js';
 import { SE } from './se.js';
@@ -75,7 +76,7 @@ export type PopFn = (gx: number, gy: number, text: string, color?: string) => vo
 
 export interface MapHandlers {
   canShear(): boolean;
-  onSheared(): void;
+  onSheared(golden: boolean): void;
   canShip(): boolean;
   onShipped(): void;
   /** 作業場シーンでのタップ（左=紡績・右=と畜） */
@@ -107,6 +108,7 @@ export class PipelineView {
   private customers: (Customer & { targetX: number })[] = [];
   private marketBought = 0;
   private marketSoldTotal = 0;
+  private shelfGoods: GoodsId[] = [];    // 店頭在庫の内訳（見た目用）
 
   constructor(private cv: HTMLCanvasElement, private pop: PopFn, private handlers: MapHandlers) {
     const ctx = cv.getContext('2d');
@@ -120,6 +122,7 @@ export class PipelineView {
   setTool(tool: Tool): void { this.tool = tool; }
   setOverlay(o: Overlay | null): void { this.overlay = o ? { ...o } : null; }
   setTrucksLeft(n: number): void { this.trucksLeft = n; }
+  setShelf(goods: GoodsId[]): void { this.shelfGoods = [...goods]; }
   setScene(scene: Scene): void {
     if (this.scene === scene) return;
     this.scene = scene;
@@ -165,15 +168,16 @@ export class PipelineView {
     }
   }
 
-  private shearFx(s: VisualSheep, onLand?: () => void): void {
+  private shearFx(s: VisualSheep, onLand?: (golden: boolean) => void): void {
     const sx = this.farmX(s.x), sy = this.farmY(s.y);
+    const golden = s.golden;
     s.kind = 'shorn'; s.shearedNow = true;
     SE.shear(); setTimeout(() => SE.pop(), 90);
-    this.pop(sx + 16, sy - 12, s.golden ? '✨キラキラの毛！' : 'ポンッ！', s.golden ? '#ffd24a' : '#fff');
+    this.pop(sx + 16, sy - 12, golden ? '✨金の毛！' : 'ポンッ！', golden ? '#ffd24a' : '#fff');
     this.flys.push({
-      sprite: WOOLBAG, scene: 'farm', scale: 2,
+      sprite: golden ? GOLD_WOOLBAG : WOOLBAG, scene: 'farm', scale: 2,
       sx: sx + 8, sy: sy - 6, tx: 36, ty: 196, t: 0,
-      onLand,
+      onLand: () => onLand?.(golden),
     });
   }
 
@@ -194,7 +198,7 @@ export class PipelineView {
         return;
       }
       if (!this.handlers.canShear()) { SE.mee(); return; }
-      this.shearFx(s, () => this.handlers.onSheared());
+      this.shearFx(s, golden => this.handlers.onSheared(golden));
     } else if (this.tool === 'ship') {
       if (s.kind === 'baby') { SE.mee(); this.pop(sx + 16, sy - 10, 'めぇ！（まだ子羊）', '#ffd24a'); return; }
       if (!this.handlers.canShip()) { SE.mee(); return; }
@@ -203,12 +207,13 @@ export class PipelineView {
     }
   }
 
-  /** おまかせ再生：1頭刈る（対象がいなければfalse） */
-  autoShearOne(onLand?: () => void): boolean {
+  /** おまかせ再生：1頭刈る（対象がいなければnull、いれば金色かどうかを返す） */
+  autoShearOne(onLand?: (golden: boolean) => void): { golden: boolean } | null {
     const s = this.sheep.find(sp => sp.kind === 'wool' && !sp.leaving);
-    if (!s) return false;
+    if (!s) return null;
+    const golden = s.golden;
     this.shearFx(s, onLand);
-    return true;
+    return { golden };
   }
 
   /** おまかせ再生：1頭出荷（毛刈り済みを優先して残す挙動はエンジンと同じくcd優先） */
@@ -466,7 +471,9 @@ export class PipelineView {
     for (const s of sorted) {
       const f = Math.floor(s.walkT) % 2 === 0;
       const flip = s.dir < 0;
-      const spr: Sprite = s.kind === 'baby' ? LAMB : s.kind === 'wool' ? (f ? SHEEP_A : SHEEP_B) : (f ? SHORN_A : SHORN_B);
+      const spr: Sprite = s.kind === 'baby' ? (s.golden ? GOLD_LAMB : LAMB)
+        : s.kind === 'wool' ? (s.golden ? (f ? GOLD_SHEEP_A : GOLD_SHEEP_B) : (f ? SHEEP_A : SHEEP_B))
+        : (f ? SHORN_A : SHORN_B);
       drawSprite(ctx, spr, this.farmX(s.x), this.farmY(s.y), 2, flip);
       if (s.shearedNow) { ctx.font = '12px sans-serif'; ctx.fillText('✂️', this.farmX(s.x) + 10, this.farmY(s.y) - 4); }
       if (s.golden && s.kind !== 'shorn') {
@@ -546,7 +553,8 @@ export class PipelineView {
     let placed = 0;
     for (const y of [86, 156]) {
       for (let i = 0; i < 9 && placed < n; i++, placed++) {
-        drawSprite(ctx, placed % 3 === 2 ? goodsSprite('genghis') : goodsSprite('muffler'), 24 + i * 32, y, 2);
+        const g = this.shelfGoods[placed];
+        drawSprite(ctx, g ? goodsSprite(g) : goodsSprite('muffler'), 24 + i * 32, y, 2);
       }
     }
     ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
@@ -616,7 +624,9 @@ export class PipelineView {
     for (const s of sorted) {
       const f = Math.floor(s.walkT) % 2 === 0;
       const flip = s.dir < 0;
-      const spr: Sprite = s.kind === 'baby' ? LAMB : s.kind === 'wool' ? (f ? SHEEP_A : SHEEP_B) : (f ? SHORN_A : SHORN_B);
+      const spr: Sprite = s.kind === 'baby' ? (s.golden ? GOLD_LAMB : LAMB)
+        : s.kind === 'wool' ? (s.golden ? (f ? GOLD_SHEEP_A : GOLD_SHEEP_B) : (f ? SHEEP_A : SHEEP_B))
+        : (f ? SHORN_A : SHORN_B);
       drawSprite(this.ctx, spr, s.x, s.y, 1, flip);
       if (s.shearedNow) { ctx.font = '8px sans-serif'; ctx.fillText('✂️', s.x + 4, s.y - 2); }
       if (s.golden && s.kind !== 'shorn') { ctx.font = '8px sans-serif'; ctx.fillText('✨', s.x + 12, s.y - 2); }

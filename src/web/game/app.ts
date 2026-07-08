@@ -30,6 +30,10 @@ const fmt = (v: number) => Math.round(v).toLocaleString('ja-JP');
 
 const TRUCK_PRICE = 5_000;   // 増車費用（暫定バランス。ラボ強化はP5で正式化）
 const TRUCK_MAX = 8;
+const GOLDEN_WOOL_BONUS = 800;
+const GAP_LABELS: Record<string, string> = {
+  qty: '数量ちがい', price: '単価ちがい', duplicate: '二重計上', missing: '記帳漏れ',
+};
 
 function emptyOrders(): MonthlyOrders {
   return {
@@ -58,6 +62,9 @@ export class App {
   private comboN = 0;                    // 連続作業コンボ
   private comboAt = 0;
   private puzzleTimer: ReturnType<typeof setInterval> | null = null;
+  private apparelList: GoodsId[] = [];   // 完成品の内訳（棚の見た目用）
+  private delicaList: GoodsId[] = [];
+  private shelf: GoodsId[] = [];
   private feed: string[] = [];
   private unread = 0;
   private view: PipelineView;
@@ -102,11 +109,12 @@ export class App {
         }
         return true;
       },
-      onSheared: () => {
+      onSheared: (golden) => {
         this.draft.sheepToShear++;
         this.im.farmWool++;
         this.sync();
         this.updateFarmCounts();
+        if (golden) this.goldenBonus();
         // ぜんぶ刈った！ボーナス演出
         const maxNow = Math.min(this.shearCap(), this.s.flock.ready);
         if (this.draft.sheepToShear >= maxNow && maxNow >= 3) {
@@ -196,6 +204,16 @@ export class App {
     return GOODS_NAMES[g] ?? RECIPE_NAMES[g as RecipeId] ?? g;
   }
 
+  /** ✨金の毛：好事家が高値で買い取り（暫定。金レシピはP5ラボで検討） */
+  private goldenBonus(): void {
+    this.s.cash += GOLDEN_WOOL_BONUS;
+    this.renderHud();
+    SE.kaching();
+    this.popText(60, 176, `✨金の毛！+${fmt(GOLDEN_WOOL_BONUS)}G`, '#ffd24a');
+    this.pushFeed(`✨ 金の毛を好事家が${fmt(GOLDEN_WOOL_BONUS)}Gで買い取り`);
+    this.texel('金色の毛！？めったに出ない逸品です。好事家が高値で…');
+  }
+
   private shearCap(): number {
     return SHEAR_CAPACITY * (this.eventId === 'shearFes' ? 2 : 1);
   }
@@ -244,6 +262,13 @@ export class App {
       apparelYarn: st('apparel', 'yarn'), apparelGoods: goodsSum('apparel') - st('apparel', 'yarn'),
       salesBoxes: goodsSum('sales'),
     };
+    // 完成品の内訳（棚に何の商品が並ぶか）
+    const expand = (cid: keyof RunState['companies'], keep: (g: GoodsId) => boolean): GoodsId[] =>
+      s.companies[cid].stock.flatMap(l => keep(l.goodsId) ? Array<GoodsId>(l.qty).fill(l.goodsId) : []);
+    this.apparelList = expand('apparel', g => (APPAREL_RECIPES as string[]).includes(g));
+    this.delicaList = expand('delica', g => (MEAT_RECIPES as string[]).includes(g));
+    this.shelf = expand('sales', () => true);
+    this.view.setShelf(this.shelf);
     this.sync();
     this.view.setTrucksLeft(this.pool);
     this.renderHud();
@@ -586,6 +611,7 @@ export class App {
           if (this.im.apparelYarn < def.inputQty) return;
           this.im.apparelYarn -= def.inputQty;
           this.im.apparelGoods++;
+          this.apparelList.push(rid);
           this.draft.apparelRecipes[rid as keyof typeof this.draft.apparelRecipes] =
             (this.draft.apparelRecipes[rid as keyof typeof this.draft.apparelRecipes] ?? 0) + 1;
           this.view.craftPop('left', goodsSprite(rid));
@@ -595,6 +621,7 @@ export class App {
           if (this.im.delicaMeat < def.inputQty) return;
           this.im.delicaMeat -= def.inputQty;
           this.im.delicaGoods++;
+          this.delicaList.push(rid);
           this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] =
             (this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] ?? 0) + 1;
           this.view.craftPop('right', goodsSprite(rid));
@@ -624,15 +651,21 @@ export class App {
     if (mvM < this.directMeat) leftovers.push(`直販肉${this.directMeat - mvM}箱`);
     let waiting = 0;
     const done = () => { if (--waiting <= 0) this.stageMarket(leftovers); };
-    const move = (route: RouteId, goods: Parameters<PipelineView['animateTransport']>[1], qty: number, sub: () => void) => {
+    const move = (route: RouteId, goods: Parameters<PipelineView['animateTransport']>[1], qty: number, sub: () => void, items: GoodsId[]) => {
       if (qty <= 0) return;
       waiting++;
       sub(); this.sync();
-      this.view.animateTransport(route, goods, () => { this.im.salesBoxes += qty; this.sync(); done(); });
+      this.view.animateTransport(route, goods, () => {
+        this.im.salesBoxes += qty;
+        this.shelf.push(...items);
+        this.view.setShelf(this.shelf);
+        this.sync();
+        done();
+      });
     };
-    move('apparel-sales', 'muffler', mvA, () => { this.im.apparelGoods -= mvA; });
-    move('delica-sales', 'genghis', mvD, () => { this.im.delicaGoods -= mvD; });
-    move('meat-sales', 'lambMeat', mvM, () => { this.im.meatMeat -= mvM; });
+    move('apparel-sales', 'muffler', mvA, () => { this.im.apparelGoods -= mvA; }, this.apparelList.splice(0, mvA));
+    move('delica-sales', 'genghis', mvD, () => { this.im.delicaGoods -= mvD; }, this.delicaList.splice(0, mvD));
+    move('meat-sales', 'lambMeat', mvM, () => { this.im.meatMeat -= mvM; }, Array<GoodsId>(mvM).fill('lambMeat'));
     if (waiting === 0) this.stageMarket(leftovers);
   }
 
@@ -719,9 +752,11 @@ export class App {
       await this.wait(220);
     }
     for (let i = 0; i < o.sheepToShear; i++) {
-      if (!this.view.autoShearOne()) break;
+      const res = this.view.autoShearOne();
+      if (!res) break;
       d.sheepToShear++;
       im.farmWool++;
+      if (res.golden) this.goldenBonus();
       this.sync();
       await this.wait(260);
     }
@@ -785,6 +820,7 @@ export class App {
         const def = RECIPES[rid];
         for (let i = 0; i < (n ?? 0) && aMade < aCap && im.apparelYarn >= def.inputQty; i++) {
           im.apparelYarn -= def.inputQty; im.apparelGoods++; aMade++;
+          this.apparelList.push(rid);
           d.apparelRecipes[rid as keyof typeof d.apparelRecipes] =
             (d.apparelRecipes[rid as keyof typeof d.apparelRecipes] ?? 0) + 1;
           SE.pop(); this.view.craftPop('left', goodsSprite(rid)); this.sync();
@@ -795,6 +831,7 @@ export class App {
         const def = RECIPES[rid];
         for (let i = 0; i < (n ?? 0) && dMade < dCap && im.delicaMeat >= def.inputQty; i++) {
           im.delicaMeat -= def.inputQty; im.delicaGoods++; dMade++;
+          this.delicaList.push(rid);
           d.meatRecipes[rid as keyof typeof d.meatRecipes] =
             (d.meatRecipes[rid as keyof typeof d.meatRecipes] ?? 0) + 1;
           SE.pop(); this.view.craftPop('right', goodsSprite(rid)); this.sync();
@@ -808,10 +845,15 @@ export class App {
     const mvA = this.alloc('apparel-sales', im.apparelGoods);
     const mvD = this.alloc('delica-sales', im.delicaGoods);
     const mvDM = this.alloc('meat-sales', Math.min(this.directMeat, im.meatMeat));
+    const takeA = this.apparelList.splice(0, mvA);
+    const takeD = this.delicaList.splice(0, mvD);
     await Promise.all([
-      this.autoTransport('apparel-sales', 'muffler', mvA, () => { im.apparelGoods -= mvA; }, () => { im.salesBoxes += mvA; }),
-      this.autoTransport('delica-sales', 'genghis', mvD, () => { im.delicaGoods -= mvD; }, () => { im.salesBoxes += mvD; }),
-      this.autoTransport('meat-sales', 'lambMeat', mvDM, () => { im.meatMeat -= mvDM; }, () => { im.salesBoxes += mvDM; }),
+      this.autoTransport('apparel-sales', 'muffler', mvA, () => { im.apparelGoods -= mvA; },
+        () => { im.salesBoxes += mvA; this.shelf.push(...takeA); this.view.setShelf(this.shelf); }),
+      this.autoTransport('delica-sales', 'genghis', mvD, () => { im.delicaGoods -= mvD; },
+        () => { im.salesBoxes += mvD; this.shelf.push(...takeD); this.view.setShelf(this.shelf); }),
+      this.autoTransport('meat-sales', 'lambMeat', mvDM, () => { im.meatMeat -= mvDM; },
+        () => { im.salesBoxes += mvDM; this.shelf.push(...Array<GoodsId>(mvDM).fill('lambMeat')); this.view.setShelf(this.shelf); }),
     ]);
 
     // ⑦開店
@@ -873,8 +915,7 @@ export class App {
         this.s.cash += PUZZLE_REWARD;
         SE.fanfare();
         this.renderHud();
-        this.pushFeed(`🧾 ズレを発見！ +${fmt(PUZZLE_REWARD)}G`);
-        this.texel(`お見事！照合ぴったり、報酬<b>+${fmt(PUZZLE_REWARD)}G</b>です`);
+        this.pushFeed(`🧾 ズレを発見！【${GAP_LABELS[p.gapType]}】 +${fmt(PUZZLE_REWARD)}G`);
       } else {
         this.pushFeed('🧾 ズレはテクセルが修正（翌月に自動反映・ペナルティなし）');
         this.texel('だいじょうぶ、修正しておきました。来月もチャンスはあります');
@@ -892,12 +933,26 @@ export class App {
       btn.addEventListener('click', () => {
         unlockAudio();
         if (judgePuzzle(p, btn.dataset.rowid!)) {
+          if (this.puzzleTimer) { clearInterval(this.puzzleTimer); this.puzzleTimer = null; }
+          // ⭕正解演出：正解行を光らせ、相方の行と差分を見せてから決算へ
           btn.classList.add('correct');
-          finish(true);
+          btn.insertAdjacentHTML('afterbegin', '⭕ ');
+          const pair = (p.gapType === 'missing' ? p.buyerRows : p.sellerRows)
+            .find(row => row.rowId === btn.dataset.rowid);
+          const target = [...p.sellerRows, ...p.buyerRows].find(row => row.rowId === btn.dataset.rowid)!;
+          const detail = p.gapType === 'duplicate' ? '同じ行が2回記帳されています'
+            : p.gapType === 'missing' ? '買い手の帳簿に相手方の行がありません'
+            : pair ? `${fmt(pair.amount)}G のはずが ${fmt(target.amount)}G` : '';
+          SE.coin();
+          this.texel(`⭕ 正解！【${GAP_LABELS[p.gapType]}】${detail}。報酬<b>+${fmt(PUZZLE_REWARD)}G</b>`);
+          this.panel.querySelectorAll<HTMLButtonElement>('.ledgerRow').forEach(b => { b.disabled = true; });
+          setTimeout(() => finish(true), 1400);
         } else {
           SE.deny();
           btn.disabled = true;
-          this.texel('そこは両方の帳簿で一致しています。くいちがう行を…！');
+          btn.classList.add('wrong');
+          btn.insertAdjacentHTML('afterbegin', '❌ ');
+          this.texel('❌ そこは両方の帳簿で一致しています。くいちがう行を…！');
         }
       });
     });
