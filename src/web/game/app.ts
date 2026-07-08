@@ -11,7 +11,7 @@ import { mulberry32 } from '../../game/rng.js';
 import { updateBallpark, rollEvent } from '../../game/ballpark.js';
 import {
   SHEAR_CAPACITY, LAMB_PRICE, TRUCK_LOAD, ROUTES, RECIPES,
-  MEAT_RECIPES, APPAREL_RECIPES, MEAT_PER_SHEEP, YARN_PER_WOOL,
+  MEAT_RECIPES, APPAREL_RECIPES, MEAT_PER_SHEEP, YARN_PER_WOOL, PUZZLE_REWARD,
 } from '../../game/constants.js';
 import type {
   EventId, MonthlyOrders, MonthlyResult, PriceStance, RecipeId, RouteId, RunState,
@@ -21,8 +21,10 @@ import { PipelineView, CW, CH, type Overlay } from './pipeline.js';
 import { YARNROLL, MEATBOX, goodsSprite } from './sprites.js';
 import { SE, unlockAudio, isSeOn, setSeOn } from './se.js';
 import {
-  MONTH_LABELS, EVENT_NAMES, RECIPE_NAMES, COMPANY_NAMES, RANK_COMMENTS,
+  MONTH_LABELS, EVENT_NAMES, RECIPE_NAMES, COMPANY_NAMES, RANK_COMMENTS, GOODS_NAMES,
 } from './labels.js';
+import type { GoodsId, LedgerRow } from '../../game/types.js';
+import { judgePuzzle } from '../../game/puzzle/ledgerGap.js';
 
 const fmt = (v: number) => Math.round(v).toLocaleString('ja-JP');
 
@@ -53,6 +55,9 @@ export class App {
   private doSlaughter: (() => void) | null = null;
   private lambsLastMonth = 0;            // 先月買った子羊（今月「おとなに！」）
   private autoSkip = false;              // おまかせ再生の早送り
+  private comboN = 0;                    // 連続作業コンボ
+  private comboAt = 0;
+  private puzzleTimer: ReturnType<typeof setInterval> | null = null;
   private feed: string[] = [];
   private unread = 0;
   private view: PipelineView;
@@ -102,6 +107,13 @@ export class App {
         this.im.farmWool++;
         this.sync();
         this.updateFarmCounts();
+        // ぜんぶ刈った！ボーナス演出
+        const maxNow = Math.min(this.shearCap(), this.s.flock.ready);
+        if (this.draft.sheepToShear >= maxNow && maxNow >= 3) {
+          SE.fanfare();
+          this.popText(130, 40, '🎉 ぜんぶ刈った！', '#ffd24a');
+          this.texel('お見事！ぜんぶ刈りました。毛袋の山、うっとりしますね');
+        }
       },
       canShip: () => true,
       onShipped: () => {
@@ -169,6 +181,19 @@ export class App {
 
   private cumProfit(): number {
     return this.s.history.reduce((t, m) => t + m.consolidatedProfit, 0);
+  }
+
+  /** 連続作業コンボ（2.5秒以内の連打で音程が上がる） */
+  private comboHit(px: number, py: number): void {
+    const now = performance.now();
+    this.comboN = now - this.comboAt < 2500 ? this.comboN + 1 : 1;
+    this.comboAt = now;
+    SE.combo(this.comboN);
+    if (this.comboN >= 3) this.popText(px, py, `×${this.comboN}コンボ！`, '#ffd24a');
+  }
+
+  private goodsName(g: GoodsId): string {
+    return GOODS_NAMES[g] ?? RECIPE_NAMES[g as RecipeId] ?? g;
   }
 
   private shearCap(): number {
@@ -434,7 +459,7 @@ export class App {
       this.draft.spinQty++;
       this.im.woolWool--;
       this.im.woolYarn += YARN_PER_WOOL;
-      SE.pop();
+      this.comboHit(76, 40);
       this.view.craftPop('left', YARNROLL);
       this.popText(76, 66, `🧶x${YARN_PER_WOOL}`, '#9fd0ff');
       return true;
@@ -445,7 +470,7 @@ export class App {
       this.draft.slaughterQty++;
       this.im.meatSheep--;
       this.im.meatMeat += MEAT_PER_SHEEP;
-      SE.pop();
+      this.comboHit(236, 40);
       this.view.craftPop('right', MEATBOX);
       this.popText(236, 66, `🥩x${MEAT_PER_SHEEP}`, '#ff9c9c');
       return true;
@@ -564,6 +589,7 @@ export class App {
           this.draft.apparelRecipes[rid as keyof typeof this.draft.apparelRecipes] =
             (this.draft.apparelRecipes[rid as keyof typeof this.draft.apparelRecipes] ?? 0) + 1;
           this.view.craftPop('left', goodsSprite(rid));
+          this.comboHit(76, 40);
           this.popText(76, 66, `👕${RECIPE_NAMES[rid]}！`, '#f3b0dd');
         } else {
           if (this.im.delicaMeat < def.inputQty) return;
@@ -572,9 +598,9 @@ export class App {
           this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] =
             (this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] ?? 0) + 1;
           this.view.craftPop('right', goodsSprite(rid));
+          this.comboHit(236, 40);
           this.popText(236, 66, `🍖${RECIPE_NAMES[rid]}！`, '#ffc98a');
         }
-        SE.pop();
         this.sync();
         this.stageCraft();
       });
@@ -806,9 +832,79 @@ export class App {
     this.renderHud();
     if (r.ballparkNews) this.pushFeed(`⚾ ${r.ballparkNews}`);
     if (next.puzzle) {
-      this.pushFeed('🧾 帳簿ズレが発生…テクセルが自動修正しました（ズレ探しはP4で搭載予定）');
-      next.puzzle = undefined;
+      this.puzzlePhase(r);
+      return;
     }
+    this.renderMonthResult(r);
+  }
+
+  // ── 🧾ズレ探し ──
+  private puzzlePhase(r: MonthlyResult): void {
+    const p = this.s.puzzle!;
+    SE.deny();
+    this.pushFeed('🧾 帳簿ズレ発生！売り手と買い手の帳簿がくいちがっています');
+    this.texel(`${COMPANY_NAMES[p.sellerCompanyId]}と${COMPANY_NAMES[p.buyerCompanyId]}の帳簿、<b>1行だけ</b>くいちがいがあります。おかしい行をタップ！`);
+    const rowBtn = (row: LedgerRow) => `
+      <button class="ledgerRow" data-rowid="${row.rowId}">
+        ${this.goodsName(row.goodsId)}　${row.qty}×${fmt(row.unitPrice)}G＝<b>${fmt(row.amount)}G</b>
+      </button>`;
+    this.panel.innerHTML = `
+      <div class="tkwin puzzleWin">
+        <div class="secTitle">🧾 帳簿ズレをさがせ！ <span id="pzTime" class="pzTime">${p.timeLimitSec}</span>秒</div>
+        <div class="ledgerGrid">
+          <div class="ledgerCol">
+            <div class="colTitle">${COMPANY_NAMES[p.sellerCompanyId]}の売上帳</div>
+            ${p.sellerRows.map(rowBtn).join('')}
+          </div>
+          <div class="ledgerCol">
+            <div class="colTitle">${COMPANY_NAMES[p.buyerCompanyId]}の仕入帳</div>
+            ${p.buyerRows.map(rowBtn).join('')}
+          </div>
+        </div>
+        <div class="btnRow"><button id="giveUp">🏳 テクセルに任せる（報酬なし）</button></div>
+      </div>`;
+
+    let remain = p.timeLimitSec;
+    const timeEl = this.panel.querySelector('#pzTime')!;
+    const finish = (solved: boolean) => {
+      if (this.puzzleTimer) { clearInterval(this.puzzleTimer); this.puzzleTimer = null; }
+      if (solved) {
+        this.s.gapsFound++;
+        this.s.cash += PUZZLE_REWARD;
+        SE.fanfare();
+        this.renderHud();
+        this.pushFeed(`🧾 ズレを発見！ +${fmt(PUZZLE_REWARD)}G`);
+        this.texel(`お見事！照合ぴったり、報酬<b>+${fmt(PUZZLE_REWARD)}G</b>です`);
+      } else {
+        this.pushFeed('🧾 ズレはテクセルが修正（翌月に自動反映・ペナルティなし）');
+        this.texel('だいじょうぶ、修正しておきました。来月もチャンスはあります');
+      }
+      this.s.puzzle = undefined;
+      this.renderMonthResult(r);
+    };
+    this.puzzleTimer = setInterval(() => {
+      remain--;
+      timeEl.textContent = String(remain);
+      if (remain <= 10) (timeEl as HTMLElement).style.color = '#ff9c9c';
+      if (remain <= 0) finish(false);
+    }, 1000);
+    this.panel.querySelectorAll<HTMLButtonElement>('.ledgerRow').forEach(btn => {
+      btn.addEventListener('click', () => {
+        unlockAudio();
+        if (judgePuzzle(p, btn.dataset.rowid!)) {
+          btn.classList.add('correct');
+          finish(true);
+        } else {
+          SE.deny();
+          btn.disabled = true;
+          this.texel('そこは両方の帳簿で一致しています。くいちがう行を…！');
+        }
+      });
+    });
+    this.panel.querySelector('#giveUp')!.addEventListener('click', () => { unlockAudio(); SE.decide(); finish(false); });
+  }
+
+  private renderMonthResult(r: MonthlyResult): void {
     const plRows = r.companyPLs.map(p =>
       `<tr><td>${COMPANY_NAMES[p.companyId]}</td><td class="num">${fmt(p.revenue)}</td>
        <td class="num ${p.profit >= 0 ? 'plus' : 'minus'}">${fmt(p.profit)}</td></tr>`).join('');

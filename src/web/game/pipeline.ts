@@ -2,7 +2,7 @@
 import type { GoodsId, MonthlyResult, RouteId, RunState } from '../../game/types.js';
 import {
   drawSprite, goodsSprite, PAL,
-  SHEEP_A, SHEEP_B, SHORN_A, SHORN_B, LAMB, TRUCK, COIN,
+  SHEEP_A, SHEEP_B, SHORN_A, SHORN_B, LAMB, TRUCK, COIN, CUSTOMER,
   WOOLBAG, YARNROLL, MEATBOX, type Sprite,
 } from './sprites.js';
 import { SE } from './se.js';
@@ -64,7 +64,9 @@ interface VisualSheep {
   kind: 'wool' | 'shorn' | 'baby';
   shearedNow: boolean;
   leaving: boolean;
+  golden: boolean;             // レアなキラキラ羊（見た目のごほうび）
 }
+interface Customer { x: number; y: number; t: number; delay: number; phase: 'in' | 'buy' | 'out' }
 interface Transport { route: RouteId; goods: GoodsId | null; t: number; onDone?: () => void }
 interface FlyFx { sprite: Sprite; scene: Scene; scale: number; sx: number; sy: number; tx: number; ty: number; t: number; onLand?: () => void }
 interface TimelineEvent { at: number; fn: () => void; fired: boolean }
@@ -102,6 +104,9 @@ export class PipelineView {
   private marketDur = 0;
   private timeline: TimelineEvent[] = [];
   private onMarketDone: (() => void) | null = null;
+  private customers: (Customer & { targetX: number })[] = [];
+  private marketBought = 0;
+  private marketSoldTotal = 0;
 
   constructor(private cv: HTMLCanvasElement, private pop: PopFn, private handlers: MapHandlers) {
     const ctx = cv.getContext('2d');
@@ -164,7 +169,7 @@ export class PipelineView {
     const sx = this.farmX(s.x), sy = this.farmY(s.y);
     s.kind = 'shorn'; s.shearedNow = true;
     SE.shear(); setTimeout(() => SE.pop(), 90);
-    this.pop(sx + 16, sy - 12, 'ポンッ！', '#fff');
+    this.pop(sx + 16, sy - 12, s.golden ? '✨キラキラの毛！' : 'ポンッ！', s.golden ? '#ffd24a' : '#fff');
     this.flys.push({
       sprite: WOOLBAG, scene: 'farm', scale: 2,
       sx: sx + 8, sy: sy - 6, tx: 36, ty: 196, t: 0,
@@ -222,10 +227,11 @@ export class PipelineView {
       x: PEN.x + 6 + Math.random() * (PEN.w - 28),
       y: PEN.y + 14 + Math.random() * (PEN.h - 32),
       dir: 1, walkT: Math.random() * 100, pause: 0,
-      kind: 'baby', shearedNow: false, leaving: false,
+      kind: 'baby', shearedNow: false, leaving: false, golden: Math.random() < 0.05,
     });
     const last = this.sheep[this.sheep.length - 1];
-    this.pop(this.farmX(last.x) + 10, this.farmY(last.y) - 8, 'めぇ！', '#9fd0ff');
+    this.pop(this.farmX(last.x) + 10, this.farmY(last.y) - 8,
+      last.golden ? '✨金色の子羊！？' : 'めぇ！', last.golden ? '#ffd24a' : '#9fd0ff');
   }
 
   removeLamb(): void {
@@ -247,7 +253,7 @@ export class PipelineView {
         y: PEN.y + 14 + Math.random() * (PEN.h - 32),
         dir: Math.random() < 0.5 ? -1 : 1,
         walkT: Math.random() * 100, pause: Math.random() * 2,
-        kind: 'wool', shearedNow: false, leaving: false,
+        kind: 'wool', shearedNow: false, leaving: false, golden: Math.random() < 0.03,
       });
     }
     want.forEach((k, i) => {
@@ -272,15 +278,28 @@ export class PipelineView {
   }
 
   startMarket(result: MonthlyResult, onDone: () => void): void {
-    this.marketDur = this.reduceMotion ? 1.2 : 2.6;
+    const n = Math.min(result.soldBoxes, 8);
+    this.customers = [];
+    this.marketBought = 0;
+    this.marketSoldTotal = result.soldBoxes;
+    this.marketDur = this.reduceMotion ? 1.2 : Math.max(2.6, 1.6 + n * 0.5);
     this.marketT = 0;
     this.onMarketDone = onDone;
     this.timeline = [];
     const big = this.scene === 'market';
     const cx = big ? 160 : 292, cy = big ? 120 : 96;
+    if (result.soldBoxes > 0 && big && !this.reduceMotion) {
+      // お客さんが1人ずつ来て買っていく
+      for (let i = 0; i < n; i++) {
+        this.customers.push({
+          x: 330 + i * 8, y: 196, t: 0, delay: 0.3 + i * 0.45,
+          phase: 'in', targetX: 250 - i * 26,
+        });
+      }
+    }
     if (result.soldBoxes > 0) {
       this.timeline.push({
-        at: 0.3, fired: false,
+        at: this.marketDur - 1.2, fired: false,
         fn: () => {
           SE.coin();
           this.pop(cx, cy, `+${result.cashIn.toLocaleString('ja-JP')}G`, '#ffd24a');
@@ -304,6 +323,8 @@ export class PipelineView {
   skipMarket(): void {
     if (this.marketT < 0) return;
     for (const ev of this.timeline) if (!ev.fired) { ev.fired = true; ev.fn(); }
+    this.customers = [];
+    this.marketBought = this.marketSoldTotal;
     this.marketT = this.marketDur;
   }
 
@@ -344,9 +365,24 @@ export class PipelineView {
 
     if (this.marketT >= 0) {
       this.marketT += dt;
+      // お客さん：来店→購入（カチーン）→退店
+      for (const c of [...this.customers]) {
+        if (this.marketT < c.delay) continue;
+        if (c.phase === 'in') {
+          c.x -= 95 * dt;
+          if (c.x <= c.targetX) { c.x = c.targetX; c.phase = 'buy'; c.t = 0; SE.kaching(); this.coinFx.push({ x: c.x, y: 160, t: 0, big: true }); this.marketBought += this.marketSoldTotal / Math.max(1, this.customers.length); }
+        } else if (c.phase === 'buy') {
+          c.t += dt;
+          if (c.t > 0.35) c.phase = 'out';
+        } else {
+          c.x += 120 * dt;
+          if (c.x > CW + 20) this.customers.splice(this.customers.indexOf(c), 1);
+        }
+      }
       for (const ev of this.timeline) if (!ev.fired && this.marketT >= ev.at) { ev.fired = true; ev.fn(); }
       if (this.marketT >= this.marketDur) {
         this.marketT = -1;
+        this.customers = [];
         const cb = this.onMarketDone;
         this.onMarketDone = null;
         cb?.();
@@ -433,6 +469,10 @@ export class PipelineView {
       const spr: Sprite = s.kind === 'baby' ? LAMB : s.kind === 'wool' ? (f ? SHEEP_A : SHEEP_B) : (f ? SHORN_A : SHORN_B);
       drawSprite(ctx, spr, this.farmX(s.x), this.farmY(s.y), 2, flip);
       if (s.shearedNow) { ctx.font = '12px sans-serif'; ctx.fillText('✂️', this.farmX(s.x) + 10, this.farmY(s.y) - 4); }
+      if (s.golden && s.kind !== 'shorn') {
+        ctx.font = '11px sans-serif';
+        ctx.fillText('✨', this.farmX(s.x) + 26, this.farmY(s.y) - 4 + Math.sin(s.walkT) * 2);
+      }
     }
   }
 
@@ -502,7 +542,7 @@ export class PipelineView {
     for (const y of [110, 180]) {
       ctx.fillStyle = '#6b4a26'; ctx.fillRect(16, y, CW - 32, 10);
     }
-    const n = this.overlay?.salesBoxes ?? 0;
+    const n = Math.max(0, (this.overlay?.salesBoxes ?? 0) - Math.round(this.marketT >= 0 ? this.marketBought : 0));
     let placed = 0;
     for (const y of [86, 156]) {
       for (let i = 0; i < 9 && placed < n; i++, placed++) {
@@ -511,6 +551,11 @@ export class PipelineView {
     }
     ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
     ctx.fillText(`店頭在庫 x${n}`, 116, 226);
+    // お客さん
+    for (const c of this.customers) {
+      if (this.marketT < c.delay) continue;
+      drawSprite(ctx, CUSTOMER, c.x, c.y, 2);
+    }
   }
 
   // ── マップ俯瞰 ──
@@ -574,6 +619,7 @@ export class PipelineView {
       const spr: Sprite = s.kind === 'baby' ? LAMB : s.kind === 'wool' ? (f ? SHEEP_A : SHEEP_B) : (f ? SHORN_A : SHORN_B);
       drawSprite(this.ctx, spr, s.x, s.y, 1, flip);
       if (s.shearedNow) { ctx.font = '8px sans-serif'; ctx.fillText('✂️', s.x + 4, s.y - 2); }
+      if (s.golden && s.kind !== 'shorn') { ctx.font = '8px sans-serif'; ctx.fillText('✨', s.x + 12, s.y - 2); }
     }
 
     for (const tr of this.transports) {

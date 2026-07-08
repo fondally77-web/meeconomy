@@ -36,6 +36,9 @@ export const SE = {
   buy(): void { tone(523, 0.08, 'square', 0.10); setTimeout(() => tone(784, 0.10, 'square', 0.10), 80); },
   deny(): void { tone(160, 0.18, 'square', 0.12, -60); },
   decide(): void { tone(880, 0.06, 'square', 0.08); },
+  /** コンボ：連続作業で音程が上がる（n=連続回数） */
+  combo(n: number): void { tone(520 * Math.pow(1.122, Math.min(n, 12)), 0.09, 'square', 0.11); },
+  kaching(): void { tone(1175, 0.05, 'square', 0.09); setTimeout(() => tone(1568, 0.09, 'square', 0.09), 55); },
   fanfare(): void {
     [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.18, 'square', 0.10), i * 130));
   },

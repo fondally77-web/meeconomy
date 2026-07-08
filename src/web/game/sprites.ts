@@ -225,6 +225,18 @@ export const TRUCK: Sprite = [
   '..........................',
   '..........................',
   '..........................'];
+// お客さん（6x10）
+export const CUSTOMER: Sprite = [
+  '..KK..',
+  '.KPPK.',
+  '.KPPK.',
+  '..RR..',
+  '.RRRR.',
+  'RRRRRR',
+  '.RRRR.',
+  '..RR..',
+  '.K..K.',
+  '.K..K.'];
 // コイン（8x8）
 export const COIN: Sprite = [
   '..YYYY..',
