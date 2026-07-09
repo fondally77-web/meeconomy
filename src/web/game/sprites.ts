@@ -235,6 +235,7 @@ export const GOLD_SHEEP_A = reskin(SHEEP_A, { W: 'Y', w: 'y' });
 export const GOLD_SHEEP_B = reskin(SHEEP_B, { W: 'Y', w: 'y' });
 export const GOLD_LAMB = reskin(LAMB, { W: 'Y', w: 'y' });
 export const GOLD_WOOLBAG = reskin(WOOLBAG, { D: 'Y', d: 'y' });
+export const GOLD_YARNROLL = reskin(YARNROLL, { T: 'Y', t: 'y' });
 
 // お客さん（6x10）
 export const CUSTOMER: Sprite = [

@@ -18,13 +18,16 @@ import type {
 } from '../../game/types.js';
 import { balancedBot } from '../../../sim/bots.js';
 import { PipelineView, CW, CH, type Overlay } from './pipeline.js';
-import { YARNROLL, MEATBOX, goodsSprite } from './sprites.js';
+import { YARNROLL, GOLD_YARNROLL, MEATBOX, goodsSprite } from './sprites.js';
 import { SE, unlockAudio, isSeOn, setSeOn } from './se.js';
 import {
   MONTH_LABELS, EVENT_NAMES, RECIPE_NAMES, COMPANY_NAMES, RANK_COMMENTS, GOODS_NAMES,
 } from './labels.js';
-import type { GoodsId, LedgerRow } from '../../game/types.js';
+import type { EngineOptions, GoodsId, LedgerRow } from '../../game/types.js';
 import { judgePuzzle } from '../../game/puzzle/ledgerGap.js';
+import {
+  LAB_NODES, loadMeta, saveMeta, levelOf, nextCost, betterRank, type MetaState,
+} from './meta.js';
 
 const fmt = (v: number) => Math.round(v).toLocaleString('ja-JP');
 
@@ -65,6 +68,10 @@ export class App {
   private apparelList: GoodsId[] = [];   // 完成品の内訳（棚の見た目用）
   private delicaList: GoodsId[] = [];
   private shelf: GoodsId[] = [];
+  private meta: MetaState = loadMeta();  // のれんP・ラボ強化（永続）
+  private engineOpts: EngineOptions = {};
+  private baseShearCap = SHEAR_CAPACITY;
+  private hintUsed = false;
   private feed: string[] = [];
   private unread = 0;
   private view: PipelineView;
@@ -112,6 +119,7 @@ export class App {
       onSheared: (golden) => {
         this.draft.sheepToShear++;
         this.im.farmWool++;
+        if (golden) this.im.goldFarmWool++;
         this.sync();
         this.updateFarmCounts();
         if (golden) this.goldenBonus();
@@ -145,10 +153,29 @@ export class App {
       this.unread = 0;
       this.renderHud();
     });
-    this.s = initRun(((Date.now() % 90000) + 1));
+    this.s = this.newRun();
     this.view.setState(this.s);
     this.pushFeed('🐑 新しい年度がはじまりました（4月）');
     this.startMonth();
+  }
+
+  /** ラボ強化を適用した新しいランを作る */
+  private newRun(): RunState {
+    const s = initRun(((Date.now() % 90000) + 1));
+    const lv = (id: string) => levelOf(this.meta, id);
+    s.flock.capacity += 5 * lv('farm');
+    s.companies.farm.capacity = s.flock.capacity;
+    s.companies.meat.capacity += 3 * lv('meat');
+    s.companies.delica.capacity += 4 * lv('delica');
+    s.companies.wool.capacity += 4 * lv('wool');
+    s.companies.apparel.capacity += 3 * lv('apparel');
+    s.companies.sales.capacity += 15 * lv('sales');
+    s.logi.trucks += lv('trucks');
+    s.cash += 5_000 * lv('cash');
+    s.ballpark.teamPower = 50 + 10 * lv('meez');
+    this.baseShearCap = SHEAR_CAPACITY + 3 * lv('shear');
+    this.engineOpts = { shearCapacity: this.baseShearCap, fridge: lv('fridge') > 0 };
+    return s;
   }
 
   // ── 共通 ──
@@ -185,7 +212,16 @@ export class App {
     this.hud.bell.textContent = this.unread > 0 ? String(this.unread) : '';
   }
 
-  private sync(): void { this.view.setOverlay(this.im); }
+  private sync(): void {
+    const im = this.im;
+    // 金の毛の内数は総量を超えない（普通の毛から先に消費される）
+    im.goldFarmWool = Math.min(im.goldFarmWool, im.farmWool);
+    im.goldWoolWool = Math.min(im.goldWoolWool, im.woolWool);
+    im.goldWoolYarn = Math.min(im.goldWoolYarn, im.woolYarn);
+    im.goldApparelYarn = Math.min(im.goldApparelYarn, im.apparelYarn);
+    this.view.setOverlay(im);
+    this.view.setCraftLists(this.apparelList, this.delicaList);
+  }
 
   private cumProfit(): number {
     return this.s.history.reduce((t, m) => t + m.consolidatedProfit, 0);
@@ -215,7 +251,7 @@ export class App {
   }
 
   private shearCap(): number {
-    return SHEAR_CAPACITY * (this.eventId === 'shearFes' ? 2 : 1);
+    return this.baseShearCap * (this.eventId === 'shearFes' ? 2 : 1);
   }
 
   private loadCap(): number {
@@ -261,6 +297,7 @@ export class App {
       delicaMeat: st('delica', 'lambMeat'), delicaGoods: goodsSum('delica') - st('delica', 'lambMeat'),
       apparelYarn: st('apparel', 'yarn'), apparelGoods: goodsSum('apparel') - st('apparel', 'yarn'),
       salesBoxes: goodsSum('sales'),
+      goldFarmWool: 0, goldWoolWool: 0, goldWoolYarn: 0, goldApparelYarn: 0,
     };
     // 完成品の内訳（棚に何の商品が並ぶか）
     const expand = (cid: keyof RunState['companies'], keep: (g: GoodsId) => boolean): GoodsId[] =>
@@ -423,8 +460,16 @@ export class App {
     const done = () => { if (--waiting <= 0) this.enterWork(leftovers); };
     if (mvW > 0) {
       waiting++;
-      this.im.farmWool -= mvW; this.sync();
-      this.view.animateTransport('farm-wool', 'wool', () => { this.im.woolWool += mvW; this.sync(); done(); });
+      const gm = Math.min(this.im.goldFarmWool, mvW);
+      this.im.farmWool -= mvW;
+      this.im.goldFarmWool -= gm;
+      this.sync();
+      this.view.animateTransport('farm-wool', 'wool', () => {
+        this.im.woolWool += mvW;
+        this.im.goldWoolWool += gm;
+        this.sync();
+        done();
+      });
     }
     if (mvS > 0) {
       waiting++;
@@ -480,13 +525,21 @@ export class App {
 
     const spin = () => {
       if (this.im.woolWool <= 0) { SE.deny(); this.texel('羊毛がありません'); return false; }
-      if (this.draft.spinQty >= woolCap) { SE.deny(); this.texel(`紡績は月${woolCap}袋まで（強化はラボ／P5）`); return false; }
+      if (this.draft.spinQty >= woolCap) { SE.deny(); this.texel(`紡績は月${woolCap}袋まで（ラボで強化できます）`); return false; }
+      const goldSpin = this.im.woolWool <= this.im.goldWoolWool; // 残りが金の毛だけ
       this.draft.spinQty++;
       this.im.woolWool--;
       this.im.woolYarn += YARN_PER_WOOL;
+      if (goldSpin) {
+        this.im.goldWoolWool--;
+        this.im.goldWoolYarn += YARN_PER_WOOL;
+        this.view.craftPop('left', GOLD_YARNROLL);
+        this.popText(76, 66, `✨金の糸x${YARN_PER_WOOL}！`, '#ffd24a');
+      } else {
+        this.view.craftPop('left', YARNROLL);
+        this.popText(76, 66, `🧶x${YARN_PER_WOOL}`, '#9fd0ff');
+      }
       this.comboHit(76, 40);
-      this.view.craftPop('left', YARNROLL);
-      this.popText(76, 66, `🧶x${YARN_PER_WOOL}`, '#9fd0ff');
       return true;
     };
     const slaughter = () => {
@@ -548,8 +601,16 @@ export class App {
     const done = () => { if (--waiting <= 0) this.enterCraft(leftovers); };
     if (mvY > 0) {
       waiting++;
-      this.im.woolYarn -= mvY; this.sync();
-      this.view.animateTransport('wool-apparel', 'yarn', () => { this.im.apparelYarn += mvY; this.sync(); done(); });
+      const gm = Math.min(this.im.goldWoolYarn, mvY);
+      this.im.woolYarn -= mvY;
+      this.im.goldWoolYarn -= gm;
+      this.sync();
+      this.view.animateTransport('wool-apparel', 'yarn', () => {
+        this.im.apparelYarn += mvY;
+        this.im.goldApparelYarn += gm;
+        this.sync();
+        done();
+      });
     }
     if (mvM > 0) {
       waiting++;
@@ -598,6 +659,8 @@ export class App {
       this.texel(`🚚が足りず ${leftovers.join('・')} は届きませんでした。増車すれば次の便から積めます`);
     } else if (this.im.apparelYarn > 0 || this.im.delicaMeat > 0) {
       this.texel('レシピをタップして1つずつ加工。加工するほど高く売れます');
+    } else if (aMade + dMade > 0) {
+      this.texel('材料をぜんぶ加工しました！店にならべましょう');
     } else {
       this.texel('今月は加工する材料なし。そのまま店へ');
     }
@@ -707,7 +770,7 @@ export class App {
     this.view.setScene('market');
     this.lambsLastMonth = this.draft.lambsToBuy;
     this.panel.innerHTML = `<div class="tkwin flowNote">🏪 えいぎょう中…（タップでスキップ）</div>`;
-    const { next, result } = simulateMonth(this.s, this.draft);
+    const { next, result } = simulateMonth(this.s, this.draft, this.engineOpts);
     this.view.startMarket(result, () => this.monthResult(next, result));
   }
 
@@ -756,7 +819,7 @@ export class App {
       if (!res) break;
       d.sheepToShear++;
       im.farmWool++;
-      if (res.golden) this.goldenBonus();
+      if (res.golden) { im.goldFarmWool++; this.goldenBonus(); }
       this.sync();
       await this.wait(260);
     }
@@ -774,8 +837,11 @@ export class App {
     this.texel('🤖「集荷トラック、しゅっぱーつ」');
     const mvW = this.alloc('farm-wool', im.farmWool);
     const mvS = this.alloc('farm-meat', im.shipWait);
+    const gmW = Math.min(im.goldFarmWool, mvW);
     await Promise.all([
-      this.autoTransport('farm-wool', 'wool', mvW, () => { im.farmWool -= mvW; }, () => { im.woolWool += mvW; }),
+      this.autoTransport('farm-wool', 'wool', mvW,
+        () => { im.farmWool -= mvW; im.goldFarmWool -= gmW; },
+        () => { im.woolWool += mvW; im.goldWoolWool += gmW; }),
       this.autoTransport('farm-meat', 'sheep', mvS, () => { im.shipWait -= mvS; }, () => { im.meatSheep += mvS; }),
     ]);
 
@@ -785,8 +851,10 @@ export class App {
       this.texel('🤖「紡績と、と畜です。えいっ」');
       const spinN = Math.min(o.spinQty, this.s.companies.wool.capacity, im.woolWool);
       for (let i = 0; i < spinN; i++) {
+        const goldSpin = im.woolWool <= im.goldWoolWool;
         d.spinQty++; im.woolWool--; im.woolYarn += YARN_PER_WOOL;
-        SE.pop(); this.view.craftPop('left', YARNROLL); this.sync();
+        if (goldSpin) { im.goldWoolWool--; im.goldWoolYarn += YARN_PER_WOOL; }
+        SE.pop(); this.view.craftPop('left', goldSpin ? GOLD_YARNROLL : YARNROLL); this.sync();
         await this.wait(200);
       }
       const slN = Math.min(o.slaughterQty, this.s.companies.meat.capacity, im.meatSheep);
@@ -804,8 +872,11 @@ export class App {
     const mvY = this.alloc('wool-apparel', im.woolYarn);
     const wantM = Math.max(0, im.meatMeat - this.directMeat);
     const mvM = this.alloc('meat-delica', wantM);
+    const gmY = Math.min(im.goldWoolYarn, mvY);
     await Promise.all([
-      this.autoTransport('wool-apparel', 'yarn', mvY, () => { im.woolYarn -= mvY; }, () => { im.apparelYarn += mvY; }),
+      this.autoTransport('wool-apparel', 'yarn', mvY,
+        () => { im.woolYarn -= mvY; im.goldWoolYarn -= gmY; },
+        () => { im.apparelYarn += mvY; im.goldApparelYarn += gmY; }),
       this.autoTransport('meat-delica', 'lambMeat', mvM, () => { im.meatMeat -= mvM; }, () => { im.delicaMeat += mvM; }),
     ]);
 
@@ -903,10 +974,25 @@ export class App {
             ${p.buyerRows.map(rowBtn).join('')}
           </div>
         </div>
-        <div class="btnRow"><button id="giveUp">🏳 テクセルに任せる（報酬なし）</button></div>
+        <div class="btnRow">
+          ${levelOf(this.meta, 'buddy') > 0 ? '<button id="pzHint">🧚 ヒント（1回）</button>' : ''}
+          <button id="giveUp">🏳 テクセルに任せる（報酬なし）</button>
+        </div>
       </div>`;
 
-    let remain = p.timeLimitSec;
+    let remain = p.timeLimitSec + 15 * levelOf(this.meta, 'buddy');
+    this.hintUsed = false;
+    this.panel.querySelector('#pzTime')!.textContent = String(remain);
+    this.panel.querySelector('#pzHint')?.addEventListener('click', () => {
+      unlockAudio();
+      if (this.hintUsed) { SE.deny(); return; }
+      this.hintUsed = true;
+      SE.decide();
+      const wrongs = [...this.panel.querySelectorAll<HTMLButtonElement>('.ledgerRow:not([disabled])')]
+        .filter(b => b.dataset.rowid !== p.answerRowId).slice(0, 3);
+      for (const b of wrongs) { b.disabled = true; b.classList.add('wrong'); b.insertAdjacentHTML('afterbegin', '🧚 '); }
+      this.texel('🧚「このへんは合ってました！のこりから探して」');
+    });
     const timeEl = this.panel.querySelector('#pzTime')!;
     const finish = (solved: boolean) => {
       if (this.puzzleTimer) { clearInterval(this.puzzleTimer); this.puzzleTimer = null; }
@@ -923,18 +1009,29 @@ export class App {
       this.s.puzzle = undefined;
       this.renderMonthResult(r);
     };
+    // 解答後は自動で進まず「けっさんへ」ボタンで進む（読む時間を確保）
+    const showContinue = (solved: boolean) => {
+      this.panel.querySelectorAll<HTMLButtonElement>('.ledgerRow').forEach(b => { b.disabled = true; });
+      const row = this.panel.querySelector('.puzzleWin .btnRow')!;
+      row.innerHTML = `<button id="pzCont" class="primary">📋 けっさんへ ▶</button>`;
+      row.querySelector('#pzCont')!.addEventListener('click', () => { unlockAudio(); SE.decide(); finish(solved); });
+    };
     this.puzzleTimer = setInterval(() => {
       remain--;
       timeEl.textContent = String(remain);
       if (remain <= 10) (timeEl as HTMLElement).style.color = '#ff9c9c';
-      if (remain <= 0) finish(false);
+      if (remain <= 0) {
+        if (this.puzzleTimer) { clearInterval(this.puzzleTimer); this.puzzleTimer = null; }
+        this.texel('じかんぎれ…！ズレはテクセルが直しておきます。ペナルティはありません');
+        showContinue(false);
+      }
     }, 1000);
     this.panel.querySelectorAll<HTMLButtonElement>('.ledgerRow').forEach(btn => {
       btn.addEventListener('click', () => {
         unlockAudio();
         if (judgePuzzle(p, btn.dataset.rowid!)) {
           if (this.puzzleTimer) { clearInterval(this.puzzleTimer); this.puzzleTimer = null; }
-          // ⭕正解演出：正解行を光らせ、相方の行と差分を見せてから決算へ
+          // ⭕正解演出：正解行を光らせ、相方の行と差分を見せる
           btn.classList.add('correct');
           btn.insertAdjacentHTML('afterbegin', '⭕ ');
           const pair = (p.gapType === 'missing' ? p.buyerRows : p.sellerRows)
@@ -945,8 +1042,7 @@ export class App {
             : pair ? `${fmt(pair.amount)}G のはずが ${fmt(target.amount)}G` : '';
           SE.coin();
           this.texel(`⭕ 正解！【${GAP_LABELS[p.gapType]}】${detail}。報酬<b>+${fmt(PUZZLE_REWARD)}G</b>`);
-          this.panel.querySelectorAll<HTMLButtonElement>('.ledgerRow').forEach(b => { b.disabled = true; });
-          setTimeout(() => finish(true), 1400);
+          showContinue(true);
         } else {
           SE.deny();
           btn.disabled = true;
@@ -1000,25 +1096,74 @@ export class App {
     const score = scoreRun(this.s, 0);
     if (score.rank === 'S' || score.rank === 'SS') SE.fanfare();
     else if (score.rank !== 'FAIL') SE.coin();
+    // メタ更新（のれんPを獲得して永続化）
+    this.meta.noren += score.norenEarned;
+    this.meta.totalNoren += score.norenEarned;
+    this.meta.runs++;
+    this.meta.bestRank = betterRank(this.meta.bestRank, score.rank);
+    saveMeta(this.meta);
     const bonusRows = score.bonuses.map(b => `<div class="bonus">✅ ${b.label} <b>+${fmt(b.amount)}G</b></div>`).join('')
       || '<div class="bonus dim">ボーナスなし</div>';
     this.panel.innerHTML = `
       <div class="tkwin annual">
-        <div class="secTitle">📊 年度決算</div>
+        <div class="secTitle">📊 年度決算 <small>${this.meta.runs}期目・自己ベスト${this.meta.bestRank}</small></div>
         <div class="rankBig rank${score.rank}">${score.rank === 'FAIL' ? '倒産…' : `ランク ${score.rank}`}</div>
         <div class="scoreRow">スコア <b>${fmt(score.score)}G</b>（連結利益 ${fmt(score.consolidatedProfitTotal)}G）</div>
         ${bonusRows}
-        <div class="scoreRow">のれんP <b>+${score.norenEarned}P</b> <small>（ラボ強化はP5で搭載予定）</small></div>
-        <div class="btnRow"><button id="againBtn" class="primary">🐑 もう一度あそぶ</button></div>
+        <div class="scoreRow">のれんP <b>+${score.norenEarned}P</b>（所持 ${this.meta.noren}P）</div>
+        <div class="btnRow">
+          <button id="againBtn">🐑 すぐもう一度</button>
+          <button id="labBtn" class="primary">🔬 ラボで強化する</button>
+        </div>
       </div>`;
     this.texel(RANK_COMMENTS[score.rank] ?? '');
-    this.panel.querySelector('#againBtn')!.addEventListener('click', () => {
-      unlockAudio(); SE.buy();
-      this.s = initRun(((Date.now() % 90000) + 1));
-      this.view.setState(this.s);
-      this.pushFeed('🐑 新しい年度がはじまりました（4月）');
-      this.startMonth();
+    this.panel.querySelector('#againBtn')!.addEventListener('click', () => { unlockAudio(); SE.buy(); this.restartRun(); });
+    this.panel.querySelector('#labBtn')!.addEventListener('click', () => { unlockAudio(); SE.decide(); this.labPhase(); });
+  }
+
+  // ── 🔬ラボ ──
+  private labPhase(): void {
+    const rows = LAB_NODES.map(node => {
+      const lv = levelOf(this.meta, node.id);
+      const cost = nextCost(this.meta, node);
+      const btn = cost === null
+        ? '<span class="labMax">MAX</span>'
+        : `<button class="mini labBuy" data-id="${node.id}" ${this.meta.noren >= cost ? '' : 'disabled'}>${cost}P</button>`;
+      return `<div class="labRow">
+        <span class="labName">${node.icon} ${node.name} <small>Lv${lv}/${node.costs.length}・${node.effect}</small></span>
+        ${btn}
+      </div>`;
+    }).join('');
+    this.panel.innerHTML = `
+      <div class="tkwin lab">
+        <div class="secTitle">🔬 ラボ <small>のれんP <b id="norenN">${this.meta.noren}</b>P</small></div>
+        <div class="note">強化は<b>次のランから</b>ずっと有効。のれんPは決算のたびに貯まります</div>
+        ${rows}
+        <div class="btnRow"><button id="startRun" class="primary">🐑 このつよさで開業する ▶</button></div>
+      </div>`;
+    this.texel('のれん（信用）が力になります。どこを伸ばしましょう？');
+    this.panel.querySelectorAll<HTMLButtonElement>('.labBuy').forEach(btn => {
+      btn.addEventListener('click', () => {
+        unlockAudio();
+        const node = LAB_NODES.find(n => n.id === btn.dataset.id)!;
+        const cost = nextCost(this.meta, node);
+        if (cost === null || this.meta.noren < cost) { SE.deny(); return; }
+        this.meta.noren -= cost;
+        this.meta.upgrades[node.id] = levelOf(this.meta, node.id) + 1;
+        saveMeta(this.meta);
+        SE.buy();
+        this.pushFeed(`🔬 ${node.name}を強化（Lv${levelOf(this.meta, node.id)}・-${cost}P）`);
+        this.labPhase();
+      });
     });
+    this.panel.querySelector('#startRun')!.addEventListener('click', () => { unlockAudio(); SE.fanfare(); this.restartRun(); });
+  }
+
+  private restartRun(): void {
+    this.s = this.newRun();
+    this.view.setState(this.s);
+    this.pushFeed('🐑 新しい年度がはじまりました（4月）');
+    this.startMonth();
   }
 }
 

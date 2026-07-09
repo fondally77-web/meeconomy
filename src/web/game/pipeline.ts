@@ -3,7 +3,7 @@ import type { GoodsId, MonthlyResult, RouteId, RunState } from '../../game/types
 import {
   drawSprite, goodsSprite, PAL,
   SHEEP_A, SHEEP_B, SHORN_A, SHORN_B, LAMB, TRUCK, COIN, CUSTOMER,
-  GOLD_SHEEP_A, GOLD_SHEEP_B, GOLD_LAMB, GOLD_WOOLBAG,
+  GOLD_SHEEP_A, GOLD_SHEEP_B, GOLD_LAMB, GOLD_WOOLBAG, GOLD_YARNROLL,
   WOOLBAG, YARNROLL, MEATBOX, type Sprite,
 } from './sprites.js';
 import { SE } from './se.js';
@@ -42,8 +42,16 @@ export interface Overlay {
   delicaMeat: number; delicaGoods: number;
   apparelYarn: number; apparelGoods: number;
   salesBoxes: number;
+  // ✨金の毛の内数（山の一部を金色で描く）
+  goldFarmWool: number; goldWoolWool: number; goldWoolYarn: number; goldApparelYarn: number;
 }
-const PILE_SPOTS: Record<keyof Overlay, { x: number; y: number; sprite: Sprite }> = {
+const GOLD_OF: Partial<Record<keyof Overlay, { key: keyof Overlay; sprite: Sprite }>> = {
+  farmWool: { key: 'goldFarmWool', sprite: GOLD_WOOLBAG },
+  woolWool: { key: 'goldWoolWool', sprite: GOLD_WOOLBAG },
+  woolYarn: { key: 'goldWoolYarn', sprite: GOLD_YARNROLL },
+  apparelYarn: { key: 'goldApparelYarn', sprite: GOLD_YARNROLL },
+};
+const PILE_SPOTS: Partial<Record<keyof Overlay, { x: number; y: number; sprite: Sprite }>> = {
   farmWool:     { x: 104, y: 92, sprite: WOOLBAG },
   shipWait:     { x: 62, y: 184, sprite: LAMB },
   woolWool:     { x: 150, y: 122, sprite: WOOLBAG },
@@ -109,6 +117,8 @@ export class PipelineView {
   private marketBought = 0;
   private marketSoldTotal = 0;
   private shelfGoods: GoodsId[] = [];    // 店頭在庫の内訳（見た目用）
+  private apparelGoodsList: GoodsId[] = [];
+  private delicaGoodsList: GoodsId[] = [];
 
   constructor(private cv: HTMLCanvasElement, private pop: PopFn, private handlers: MapHandlers) {
     const ctx = cv.getContext('2d');
@@ -123,6 +133,10 @@ export class PipelineView {
   setOverlay(o: Overlay | null): void { this.overlay = o ? { ...o } : null; }
   setTrucksLeft(n: number): void { this.trucksLeft = n; }
   setShelf(goods: GoodsId[]): void { this.shelfGoods = [...goods]; }
+  setCraftLists(apparel: GoodsId[], delica: GoodsId[]): void {
+    this.apparelGoodsList = [...apparel];
+    this.delicaGoodsList = [...delica];
+  }
   setScene(scene: Scene): void {
     if (this.scene === scene) return;
     this.scene = scene;
@@ -459,10 +473,13 @@ export class PipelineView {
       for (let i = 0; i < Math.min(3, this.overlay.shipWait); i++) drawSprite(ctx, LAMB, 268 + i * 14, 190 - i * 4, 1.5);
       ctx.fillText(`x${this.overlay.shipWait}`, 296, 214);
     }
-    // 毛袋の山（左下・大）
+    // 毛袋の山（左下・大。金の毛は金色で）
     if (this.overlay && this.overlay.farmWool > 0) {
       const n = Math.min(4, this.overlay.farmWool);
-      for (let i = 0; i < n; i++) drawSprite(ctx, WOOLBAG, 18 + i * 12, 200 - i * 6, 2);
+      const gn = Math.min(this.overlay.goldFarmWool, n);
+      for (let i = 0; i < n; i++) {
+        drawSprite(ctx, i < gn ? GOLD_WOOLBAG : WOOLBAG, 18 + i * 12, 200 - i * 6, 2);
+      }
       ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
       ctx.fillText(`x${this.overlay.farmWool}`, 24 + n * 12, 216);
     }
@@ -503,17 +520,29 @@ export class PipelineView {
 
     if (!this.overlay) return;
     const o = this.overlay;
-    const pile = (x: number, y: number, spr: Sprite, n: number, scale = 2) => {
+    const pile = (x: number, y: number, spr: Sprite, n: number, goldN = 0, goldSpr: Sprite = spr) => {
       if (n <= 0) return;
       const show = Math.min(3, n);
-      for (let i = 0; i < show; i++) drawSprite(ctx, spr, x + i * 10, y - i * 5, scale);
+      const gn = Math.min(goldN, show);
+      for (let i = 0; i < show; i++) drawSprite(ctx, i < gn ? goldSpr : spr, x + i * 10, y - i * 5, 2);
+      ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
+      ctx.fillText(`x${n}`, x + show * 10 + 10, y + 16);
+    };
+    // 完成品は「実際に作った商品」の見た目で積む
+    const listPile = (x: number, y: number, list: GoodsId[], n: number, fallback: Sprite) => {
+      if (n <= 0) return;
+      const show = Math.min(3, n);
+      for (let i = 0; i < show; i++) {
+        const g = list[n - show + i];
+        drawSprite(ctx, g ? goodsSprite(g) : fallback, x + i * 10, y - i * 5, 2);
+      }
       ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
       ctx.fillText(`x${n}`, x + show * 10 + 10, y + 16);
     };
     if (isWork) {
-      // ウール社：羊毛→糸
-      pile(24, 150, WOOLBAG, o.woolWool);
-      pile(96, 90, YARNROLL, o.woolYarn);
+      // ウール社：羊毛→糸（金の毛は金色のまま）
+      pile(24, 150, WOOLBAG, o.woolWool, o.goldWoolWool, GOLD_WOOLBAG);
+      pile(96, 90, YARNROLL, o.woolYarn, o.goldWoolYarn, GOLD_YARNROLL);
       // ミート社：羊→ラム肉
       if (o.meatSheep > 0) {
         for (let i = 0; i < Math.min(3, o.meatSheep); i++) drawSprite(ctx, LAMB, 184 + i * 14, 146 - i * 5, 2);
@@ -525,11 +554,11 @@ export class PipelineView {
       ctx.fillText('タップでと畜→', 184, 196);
     } else {
       // アパレル：糸→服
-      pile(24, 150, YARNROLL, o.apparelYarn);
-      pile(96, 90, goodsSprite('muffler'), o.apparelGoods);
+      pile(24, 150, YARNROLL, o.apparelYarn, o.goldApparelYarn, GOLD_YARNROLL);
+      listPile(96, 90, this.apparelGoodsList, o.apparelGoods, goodsSprite('muffler'));
       // デリカ：肉→加工品
       pile(184, 150, MEATBOX, o.delicaMeat);
-      pile(256, 90, goodsSprite('genghis'), o.delicaGoods);
+      listPile(256, 90, this.delicaGoodsList, o.delicaGoods, goodsSprite('genghis'));
       ctx.fillStyle = '#ffd24a'; ctx.font = '9px DotGothic16, monospace';
       ctx.fillText('レシピは下から', 24, 196);
       ctx.fillText('レシピは下から', 184, 196);
@@ -610,11 +639,15 @@ export class PipelineView {
     }
 
     if (this.overlay) {
-      for (const [key, spot] of Object.entries(PILE_SPOTS) as [keyof Overlay, typeof PILE_SPOTS[keyof Overlay]][]) {
+      for (const [key, spot] of Object.entries(PILE_SPOTS) as [keyof Overlay, { x: number; y: number; sprite: Sprite }][]) {
         const n = this.overlay[key];
         if (n <= 0) continue;
         const show = Math.min(3, n);
-        for (let i = 0; i < show; i++) drawSprite(this.ctx, spot.sprite, spot.x + i * 5, spot.y - i * 2, 1);
+        const gold = GOLD_OF[key];
+        const gn = gold ? Math.min(this.overlay[gold.key], show) : 0;
+        for (let i = 0; i < show; i++) {
+          drawSprite(this.ctx, gold && i < gn ? gold.sprite : spot.sprite, spot.x + i * 5, spot.y - i * 2, 1);
+        }
         ctx.fillStyle = '#fff'; ctx.font = '8px DotGothic16, monospace';
         ctx.fillText(`x${n}`, spot.x + show * 5 + 6, spot.y + 8);
       }

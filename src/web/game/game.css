@@ -145,6 +145,13 @@ table.pl tr.star td { color: var(--gold); font-size: 16px; }
   50% { filter: brightness(1.6); }
 }
 
+/* ラボ */
+.labRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px dashed rgba(245, 242, 232, .2); }
+.labRow .labName { font-size: 15px; }
+.labRow .labName small { display: block; font-size: 12px; opacity: .7; }
+.labMax { color: var(--gold); font-size: 13px; padding: 0 10px; }
+.labBuy { min-width: 64px; }
+
 /* 年度決算 */
 .rankBig { font-size: 42px; text-align: center; margin: 10px 0; color: var(--gold); }
 .rankBig.rankFAIL { color: #ff9c9c; font-size: 30px; }
