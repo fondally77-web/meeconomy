@@ -1,11 +1,16 @@
 /** S02 パイプライン画面：シーン切替式（牧場ズーム／マップ俯瞰／作業場／工房／店先） */
 import type { GoodsId, MonthlyResult, RouteId, RunState } from '../../game/types.js';
 import {
-  drawSprite, goodsSprite, PAL,
+  drawSprite, goodsSprite, goldify, PAL,
   SHEEP_A, SHEEP_B, SHORN_A, SHORN_B, LAMB, TRUCK, COIN, CUSTOMER,
   GOLD_SHEEP_A, GOLD_SHEEP_B, GOLD_LAMB, GOLD_WOOLBAG, GOLD_YARNROLL,
   WOOLBAG, YARNROLL, MEATBOX, type Sprite,
 } from './sprites.js';
+
+/** 商品1個ぶんの見た目情報（金の糸から作った商品は金色） */
+export interface GoodsItem { g: GoodsId; gold: boolean }
+export const itemSprite = (it: GoodsItem | undefined, fallback: Sprite): Sprite =>
+  it ? (it.gold ? goldify(goodsSprite(it.g)) : goodsSprite(it.g)) : fallback;
 import { SE } from './se.js';
 
 export const CW = 320, CH = 240;
@@ -116,9 +121,9 @@ export class PipelineView {
   private customers: (Customer & { targetX: number })[] = [];
   private marketBought = 0;
   private marketSoldTotal = 0;
-  private shelfGoods: GoodsId[] = [];    // 店頭在庫の内訳（見た目用）
-  private apparelGoodsList: GoodsId[] = [];
-  private delicaGoodsList: GoodsId[] = [];
+  private shelfGoods: GoodsItem[] = [];  // 店頭在庫の内訳（見た目用）
+  private apparelGoodsList: GoodsItem[] = [];
+  private delicaGoodsList: GoodsItem[] = [];
 
   constructor(private cv: HTMLCanvasElement, private pop: PopFn, private handlers: MapHandlers) {
     const ctx = cv.getContext('2d');
@@ -132,8 +137,8 @@ export class PipelineView {
   setTool(tool: Tool): void { this.tool = tool; }
   setOverlay(o: Overlay | null): void { this.overlay = o ? { ...o } : null; }
   setTrucksLeft(n: number): void { this.trucksLeft = n; }
-  setShelf(goods: GoodsId[]): void { this.shelfGoods = [...goods]; }
-  setCraftLists(apparel: GoodsId[], delica: GoodsId[]): void {
+  setShelf(goods: GoodsItem[]): void { this.shelfGoods = [...goods]; }
+  setCraftLists(apparel: GoodsItem[], delica: GoodsItem[]): void {
     this.apparelGoodsList = [...apparel];
     this.delicaGoodsList = [...delica];
   }
@@ -528,13 +533,12 @@ export class PipelineView {
       ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
       ctx.fillText(`x${n}`, x + show * 10 + 10, y + 16);
     };
-    // 完成品は「実際に作った商品」の見た目で積む
-    const listPile = (x: number, y: number, list: GoodsId[], n: number, fallback: Sprite) => {
+    // 完成品は「実際に作った商品」の見た目で積む（金の商品は金色）
+    const listPile = (x: number, y: number, list: GoodsItem[], n: number, fallback: Sprite) => {
       if (n <= 0) return;
       const show = Math.min(3, n);
       for (let i = 0; i < show; i++) {
-        const g = list[n - show + i];
-        drawSprite(ctx, g ? goodsSprite(g) : fallback, x + i * 10, y - i * 5, 2);
+        drawSprite(ctx, itemSprite(list[n - show + i], fallback), x + i * 10, y - i * 5, 2);
       }
       ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
       ctx.fillText(`x${n}`, x + show * 10 + 10, y + 16);
@@ -582,8 +586,7 @@ export class PipelineView {
     let placed = 0;
     for (const y of [86, 156]) {
       for (let i = 0; i < 9 && placed < n; i++, placed++) {
-        const g = this.shelfGoods[placed];
-        drawSprite(ctx, g ? goodsSprite(g) : goodsSprite('muffler'), 24 + i * 32, y, 2);
+        drawSprite(ctx, itemSprite(this.shelfGoods[placed], goodsSprite('muffler')), 24 + i * 32, y, 2);
       }
     }
     ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';

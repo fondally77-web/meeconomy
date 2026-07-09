@@ -237,6 +237,18 @@ export const GOLD_LAMB = reskin(LAMB, { W: 'Y', w: 'y' });
 export const GOLD_WOOLBAG = reskin(WOOLBAG, { D: 'Y', d: 'y' });
 export const GOLD_YARNROLL = reskin(YARNROLL, { T: 'Y', t: 'y' });
 
+// 任意の商品スプライトを金色バージョンに（結果はキャッシュ）
+const GOLD_MAP: Record<string, string> = {
+  A: 'Y', a: 'y', T: 'Y', t: 'y', D: 'Y', d: 'y',
+  W: 'Y', w: 'y', R: 'Y', r: 'y', O: 'Y', o: 'y', P: 'y',
+};
+const goldCache = new Map<Sprite, Sprite>();
+export function goldify(spr: Sprite): Sprite {
+  let g = goldCache.get(spr);
+  if (!g) { g = reskin(spr, GOLD_MAP); goldCache.set(spr, g); }
+  return g;
+}
+
 // お客さん（6x10）
 export const CUSTOMER: Sprite = [
   '..KK..',

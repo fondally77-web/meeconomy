@@ -12,13 +12,14 @@ import { updateBallpark, rollEvent } from '../../game/ballpark.js';
 import {
   SHEAR_CAPACITY, LAMB_PRICE, TRUCK_LOAD, ROUTES, RECIPES,
   MEAT_RECIPES, APPAREL_RECIPES, MEAT_PER_SHEEP, YARN_PER_WOOL, PUZZLE_REWARD,
+  SHEAR_FEE, SLAUGHTER_FEE_PER_SHEEP, SPIN_FEE_PER_YARN, SHEEP_BOOK_VALUE, INITIAL_CASH,
 } from '../../game/constants.js';
 import type {
   EventId, MonthlyOrders, MonthlyResult, PriceStance, RecipeId, RouteId, RunState,
 } from '../../game/types.js';
 import { balancedBot } from '../../../sim/bots.js';
-import { PipelineView, CW, CH, type Overlay } from './pipeline.js';
-import { YARNROLL, GOLD_YARNROLL, MEATBOX, goodsSprite } from './sprites.js';
+import { PipelineView, CW, CH, type Overlay, type GoodsItem } from './pipeline.js';
+import { YARNROLL, GOLD_YARNROLL, MEATBOX, goodsSprite, goldify } from './sprites.js';
 import { SE, unlockAudio, isSeOn, setSeOn } from './se.js';
 import {
   MONTH_LABELS, EVENT_NAMES, RECIPE_NAMES, COMPANY_NAMES, RANK_COMMENTS, GOODS_NAMES,
@@ -65,9 +66,10 @@ export class App {
   private comboN = 0;                    // 連続作業コンボ
   private comboAt = 0;
   private puzzleTimer: ReturnType<typeof setInterval> | null = null;
-  private apparelList: GoodsId[] = [];   // 完成品の内訳（棚の見た目用）
-  private delicaList: GoodsId[] = [];
-  private shelf: GoodsId[] = [];
+  private apparelList: GoodsItem[] = []; // 完成品の内訳（棚の見た目用・金の商品含む）
+  private delicaList: GoodsItem[] = [];
+  private shelf: GoodsItem[] = [];
+  private goldCarry = { farmWool: 0, woolWool: 0, woolYarn: 0, apparelYarn: 0 };  // 金の毛の月またぎ
   private meta: MetaState = loadMeta();  // のれんP・ラボ強化（永続）
   private engineOpts: EngineOptions = {};
   private baseShearCap = SHEAR_CAPACITY;
@@ -207,7 +209,7 @@ export class App {
 
   private renderHud(): void {
     this.hud.money.textContent = fmt(this.s.cash);
-    this.hud.month.textContent = `🗓 ${MONTH_LABELS[Math.min(this.s.month, 11)]}`;
+    this.hud.month.textContent = `🗓 ${this.meta.runs + 1}期 ${MONTH_LABELS[Math.min(this.s.month, 11)]}`;
     this.hud.meez.textContent = `⚾${this.s.ballpark.headerLabel}`;
     this.hud.bell.textContent = this.unread > 0 ? String(this.unread) : '';
   }
@@ -297,11 +299,17 @@ export class App {
       delicaMeat: st('delica', 'lambMeat'), delicaGoods: goodsSum('delica') - st('delica', 'lambMeat'),
       apparelYarn: st('apparel', 'yarn'), apparelGoods: goodsSum('apparel') - st('apparel', 'yarn'),
       salesBoxes: goodsSum('sales'),
-      goldFarmWool: 0, goldWoolWool: 0, goldWoolYarn: 0, goldApparelYarn: 0,
+      // 先月の金の毛は在庫が残っていれば金色のまま
+      goldFarmWool: Math.min(this.goldCarry.farmWool, st('farm', 'wool')),
+      goldWoolWool: Math.min(this.goldCarry.woolWool, st('wool', 'wool')),
+      goldWoolYarn: Math.min(this.goldCarry.woolYarn, st('wool', 'yarn')),
+      goldApparelYarn: Math.min(this.goldCarry.apparelYarn, st('apparel', 'yarn')),
     };
     // 完成品の内訳（棚に何の商品が並ぶか）
-    const expand = (cid: keyof RunState['companies'], keep: (g: GoodsId) => boolean): GoodsId[] =>
-      s.companies[cid].stock.flatMap(l => keep(l.goodsId) ? Array<GoodsId>(l.qty).fill(l.goodsId) : []);
+    const expand = (cid: keyof RunState['companies'], keep: (g: GoodsId) => boolean): GoodsItem[] =>
+      s.companies[cid].stock.flatMap(l => keep(l.goodsId)
+        ? Array.from({ length: l.qty }, () => ({ g: l.goodsId, gold: false }))
+        : []);
     this.apparelList = expand('apparel', g => (APPAREL_RECIPES as string[]).includes(g));
     this.delicaList = expand('delica', g => (MEAT_RECIPES as string[]).includes(g));
     this.shelf = expand('sales', () => true);
@@ -327,8 +335,8 @@ export class App {
         <div class="secTitle">① 🐑ファームのお仕事 <small>${MONTH_LABELS[s.month]}・🚚${s.logi.trucks}台</small></div>
         ${eventNote}
         <div class="toolRow" id="toolRow">
-          <button id="toolShear" class="on">✂️ 毛を刈る</button>
-          <button id="toolShip">🔪 出荷する</button>
+          <button id="toolShear" class="on">✂️ 毛を刈る<br><small>刈毛費${fmt(SHEAR_FEE)}G/頭</small></button>
+          <button id="toolShip">🔪 出荷する<br><small>羊はいなくなる</small></button>
         </div>
         <div class="note">道具を選んで<b>羊をタップ</b>！　✂️<span id="cntShear">0</span>/${this.shearCap()}頭　🔪<span id="cntShip">0</span>頭　<span id="truckNeed"></span></div>
         <div class="step" data-key="buy">
@@ -500,11 +508,11 @@ export class App {
       <div class="tkwin stageWin">
         <div class="secTitle">② しこみのお仕事 <small>画面タップでも作業できます</small></div>
         <div class="workRow">
-          <button id="spinBtn" ${canSpin ? '' : 'disabled'}>🧶 紡績する<br><small>羊毛${this.im.woolWool}袋 → 糸${YARN_PER_WOOL}巻（あと${woolCap - this.draft.spinQty}回）</small></button>
+          <button id="spinBtn" ${canSpin ? '' : 'disabled'}>🧶 紡績する<br><small>羊毛${this.im.woolWool}袋 → 糸${YARN_PER_WOOL}巻・費用${fmt(SPIN_FEE_PER_YARN * YARN_PER_WOOL)}G（あと${woolCap - this.draft.spinQty}回）</small></button>
           <button id="spinAll" class="mini wide" ${canSpin ? '' : 'disabled'}>まとめて</button>
         </div>
         <div class="workRow">
-          <button id="slBtn" ${canSl ? '' : 'disabled'}>🥩 と畜する<br><small>羊${this.im.meatSheep}頭 → ラム肉${MEAT_PER_SHEEP}箱（あと${meatCap - this.draft.slaughterQty}回）</small></button>
+          <button id="slBtn" ${canSl ? '' : 'disabled'}>🥩 と畜する<br><small>羊${this.im.meatSheep}頭 → ラム肉${MEAT_PER_SHEEP}箱・費用${fmt(SLAUGHTER_FEE_PER_SHEEP)}G（あと${meatCap - this.draft.slaughterQty}回）</small></button>
           <button id="slAll" class="mini wide" ${canSl ? '' : 'disabled'}>まとめて</button>
         </div>
         ${this.im.meatMeat > 0 ? `
@@ -526,7 +534,7 @@ export class App {
     const spin = () => {
       if (this.im.woolWool <= 0) { SE.deny(); this.texel('羊毛がありません'); return false; }
       if (this.draft.spinQty >= woolCap) { SE.deny(); this.texel(`紡績は月${woolCap}袋まで（ラボで強化できます）`); return false; }
-      const goldSpin = this.im.woolWool <= this.im.goldWoolWool; // 残りが金の毛だけ
+      const goldSpin = this.im.goldWoolWool > 0; // 金の毛から先に紡ぐ
       this.draft.spinQty++;
       this.im.woolWool--;
       this.im.woolYarn += YARN_PER_WOOL;
@@ -641,7 +649,7 @@ export class App {
       const def = RECIPES[rid];
       const ok = stockLeft >= def.inputQty && capLeft > 0;
       return `<button class="craftBtn" data-rid="${rid}" ${ok ? '' : 'disabled'}>
-        ${RECIPE_NAMES[rid]}<br><small>${def.inputGoods === 'yarn' ? '糸' : '肉'}${def.inputQty}→${fmt(def.marketPrice)}G</small>
+        ${RECIPE_NAMES[rid]}<br><small>${def.inputGoods === 'yarn' ? '糸' : '肉'}${def.inputQty}＋加工費${fmt(def.fee)}G→${fmt(def.marketPrice)}G</small>
       </button>`;
     };
     this.panel.innerHTML = `
@@ -672,19 +680,23 @@ export class App {
         const isApparel = def.inputGoods === 'yarn';
         if (isApparel) {
           if (this.im.apparelYarn < def.inputQty) return;
+          // 金の糸を優先して使い、1巻でも使えば金の商品に
+          const goldUse = Math.min(this.im.goldApparelYarn, def.inputQty);
+          this.im.goldApparelYarn -= goldUse;
           this.im.apparelYarn -= def.inputQty;
           this.im.apparelGoods++;
-          this.apparelList.push(rid);
+          const gold = goldUse > 0;
+          this.apparelList.push({ g: rid, gold });
           this.draft.apparelRecipes[rid as keyof typeof this.draft.apparelRecipes] =
             (this.draft.apparelRecipes[rid as keyof typeof this.draft.apparelRecipes] ?? 0) + 1;
-          this.view.craftPop('left', goodsSprite(rid));
+          this.view.craftPop('left', gold ? goldify(goodsSprite(rid)) : goodsSprite(rid));
           this.comboHit(76, 40);
-          this.popText(76, 66, `👕${RECIPE_NAMES[rid]}！`, '#f3b0dd');
+          this.popText(76, 66, gold ? `✨金の${RECIPE_NAMES[rid]}！` : `👕${RECIPE_NAMES[rid]}！`, gold ? '#ffd24a' : '#f3b0dd');
         } else {
           if (this.im.delicaMeat < def.inputQty) return;
           this.im.delicaMeat -= def.inputQty;
           this.im.delicaGoods++;
-          this.delicaList.push(rid);
+          this.delicaList.push({ g: rid, gold: false });
           this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] =
             (this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] ?? 0) + 1;
           this.view.craftPop('right', goodsSprite(rid));
@@ -714,7 +726,7 @@ export class App {
     if (mvM < this.directMeat) leftovers.push(`直販肉${this.directMeat - mvM}箱`);
     let waiting = 0;
     const done = () => { if (--waiting <= 0) this.stageMarket(leftovers); };
-    const move = (route: RouteId, goods: Parameters<PipelineView['animateTransport']>[1], qty: number, sub: () => void, items: GoodsId[]) => {
+    const move = (route: RouteId, goods: Parameters<PipelineView['animateTransport']>[1], qty: number, sub: () => void, items: GoodsItem[]) => {
       if (qty <= 0) return;
       waiting++;
       sub(); this.sync();
@@ -728,7 +740,8 @@ export class App {
     };
     move('apparel-sales', 'muffler', mvA, () => { this.im.apparelGoods -= mvA; }, this.apparelList.splice(0, mvA));
     move('delica-sales', 'genghis', mvD, () => { this.im.delicaGoods -= mvD; }, this.delicaList.splice(0, mvD));
-    move('meat-sales', 'lambMeat', mvM, () => { this.im.meatMeat -= mvM; }, Array<GoodsId>(mvM).fill('lambMeat'));
+    move('meat-sales', 'lambMeat', mvM, () => { this.im.meatMeat -= mvM; },
+      Array.from({ length: mvM }, () => ({ g: 'lambMeat' as GoodsId, gold: false })));
     if (waiting === 0) this.stageMarket(leftovers);
   }
 
@@ -769,6 +782,11 @@ export class App {
     this.view.setTool(null);
     this.view.setScene('market');
     this.lambsLastMonth = this.draft.lambsToBuy;
+    // 使い残した金の毛は来月へ持ち越し（在庫が残っていれば）
+    this.goldCarry = {
+      farmWool: this.im.goldFarmWool, woolWool: this.im.goldWoolWool,
+      woolYarn: this.im.goldWoolYarn, apparelYarn: this.im.goldApparelYarn,
+    };
     this.panel.innerHTML = `<div class="tkwin flowNote">🏪 えいぎょう中…（タップでスキップ）</div>`;
     const { next, result } = simulateMonth(this.s, this.draft, this.engineOpts);
     this.view.startMarket(result, () => this.monthResult(next, result));
@@ -851,7 +869,7 @@ export class App {
       this.texel('🤖「紡績と、と畜です。えいっ」');
       const spinN = Math.min(o.spinQty, this.s.companies.wool.capacity, im.woolWool);
       for (let i = 0; i < spinN; i++) {
-        const goldSpin = im.woolWool <= im.goldWoolWool;
+        const goldSpin = im.goldWoolWool > 0;
         d.spinQty++; im.woolWool--; im.woolYarn += YARN_PER_WOOL;
         if (goldSpin) { im.goldWoolWool--; im.goldWoolYarn += YARN_PER_WOOL; }
         SE.pop(); this.view.craftPop('left', goldSpin ? GOLD_YARNROLL : YARNROLL); this.sync();
@@ -890,11 +908,14 @@ export class App {
       for (const [rid, n] of Object.entries(o.apparelRecipes) as [RecipeId, number][]) {
         const def = RECIPES[rid];
         for (let i = 0; i < (n ?? 0) && aMade < aCap && im.apparelYarn >= def.inputQty; i++) {
+          const goldUse = Math.min(im.goldApparelYarn, def.inputQty);
+          im.goldApparelYarn -= goldUse;
           im.apparelYarn -= def.inputQty; im.apparelGoods++; aMade++;
-          this.apparelList.push(rid);
+          const gold = goldUse > 0;
+          this.apparelList.push({ g: rid, gold });
           d.apparelRecipes[rid as keyof typeof d.apparelRecipes] =
             (d.apparelRecipes[rid as keyof typeof d.apparelRecipes] ?? 0) + 1;
-          SE.pop(); this.view.craftPop('left', goodsSprite(rid)); this.sync();
+          SE.pop(); this.view.craftPop('left', gold ? goldify(goodsSprite(rid)) : goodsSprite(rid)); this.sync();
           await this.wait(220);
         }
       }
@@ -902,7 +923,7 @@ export class App {
         const def = RECIPES[rid];
         for (let i = 0; i < (n ?? 0) && dMade < dCap && im.delicaMeat >= def.inputQty; i++) {
           im.delicaMeat -= def.inputQty; im.delicaGoods++; dMade++;
-          this.delicaList.push(rid);
+          this.delicaList.push({ g: rid, gold: false });
           d.meatRecipes[rid as keyof typeof d.meatRecipes] =
             (d.meatRecipes[rid as keyof typeof d.meatRecipes] ?? 0) + 1;
           SE.pop(); this.view.craftPop('right', goodsSprite(rid)); this.sync();
@@ -924,7 +945,11 @@ export class App {
       this.autoTransport('delica-sales', 'genghis', mvD, () => { im.delicaGoods -= mvD; },
         () => { im.salesBoxes += mvD; this.shelf.push(...takeD); this.view.setShelf(this.shelf); }),
       this.autoTransport('meat-sales', 'lambMeat', mvDM, () => { im.meatMeat -= mvDM; },
-        () => { im.salesBoxes += mvDM; this.shelf.push(...Array<GoodsId>(mvDM).fill('lambMeat')); this.view.setShelf(this.shelf); }),
+        () => {
+          im.salesBoxes += mvDM;
+          this.shelf.push(...Array.from({ length: mvDM }, () => ({ g: 'lambMeat' as GoodsId, gold: false })));
+          this.view.setShelf(this.shelf);
+        }),
     ]);
 
     // ⑦開店
@@ -1058,27 +1083,54 @@ export class App {
   private renderMonthResult(r: MonthlyResult): void {
     const plRows = r.companyPLs.map(p =>
       `<tr><td>${COMPANY_NAMES[p.companyId]}</td><td class="num">${fmt(p.revenue)}</td>
+       <td class="num">${fmt(p.cost)}</td>
        <td class="num ${p.profit >= 0 ? 'plus' : 'minus'}">${fmt(p.profit)}</td></tr>`).join('');
+    // B/S（貸借対照表）: 現金＋在庫（グループ原価）＋羊
+    const s = this.s;
+    const inventory = (Object.keys(s.companies) as (keyof RunState['companies'])[])
+      .reduce((t, cid) => t + s.companies[cid].stock.reduce((u, l) => u + l.groupCost * l.qty, 0), 0);
+    const livestock = totalSheep(s.flock) * SHEEP_BOOK_VALUE;
+    const assets = s.cash + inventory + livestock;
     this.panel.innerHTML = `
       <div class="tkwin result">
-        <div class="secTitle">📋 ${MONTH_LABELS[r.month]}のけっさん</div>
+        <div class="secTitle">📋 ${MONTH_LABELS[r.month]}のけっさん（P/L）</div>
         <table class="pl">
-          <tr><th>会社</th><th class="num">売上</th><th class="num">利益</th></tr>
+          <tr><th>会社</th><th class="num">売上</th><th class="num">費用</th><th class="num">利益</th></tr>
           ${plRows}
-          <tr class="line"><td>たんじゅん合計</td><td></td><td class="num">${fmt(r.simpleSum)}</td></tr>
-          <tr class="star"><td>グループれんけつ <button class="mini" id="whyBtn">★</button></td><td></td>
+          <tr class="line"><td>たんじゅん合計</td><td></td><td></td><td class="num">${fmt(r.simpleSum)}</td></tr>
+          <tr class="star"><td>グループれんけつ <button class="mini" id="whyBtn">★</button></td><td></td><td></td>
             <td class="num ${r.consolidatedProfit >= 0 ? 'plus' : 'minus'}"><b>${fmt(r.consolidatedProfit)}</b></td></tr>
         </table>
         <div id="whyBox" class="hidden">内部どうしの売買 <b>${fmt(r.eliminations)}G</b> は、グループの外から見ると
           「右のポケットから左のポケット」。れんけつでは消えます</div>
+        <div id="bsBox" class="hidden">
+          <div class="secTitle">🏦 いまの財産（B/S・グループ）</div>
+          <table class="pl">
+            <tr><td>💰 現金</td><td class="num">${fmt(s.cash)}G</td></tr>
+            <tr><td>📦 在庫（原価で評価）</td><td class="num">${fmt(inventory)}G</td></tr>
+            <tr><td>🐑 羊（${totalSheep(s.flock)}頭×${fmt(SHEEP_BOOK_VALUE)}G）</td><td class="num">${fmt(livestock)}G</td></tr>
+            <tr class="line"><td><b>資産合計</b>（借金なし＝ぜんぶ自前）</td>
+              <td class="num"><b>${fmt(assets)}G</b></td></tr>
+            <tr><td>スタート時からの増減</td>
+              <td class="num ${assets - INITIAL_CASH >= 0 ? 'plus' : 'minus'}">${assets - INITIAL_CASH >= 0 ? '+' : ''}${fmt(assets - INITIAL_CASH)}G</td></tr>
+          </table>
+          <div class="note dim">在庫はまだお金になっていない財産。売れれば現金に、腐れば消えます</div>
+        </div>
         <div class="cashRow">💰 現金 ${fmt(r.cashEnd)}G（収入${fmt(r.cashIn)}／支出${fmt(r.cashOut)}）
           ／ 販売${r.soldBoxes}箱${r.disposedBoxes > 0 ? `／<span class="minus">廃棄${r.disposedBoxes}箱</span>` : ''}</div>
         <div class="cashRow">📈 年度累計 <b class="${this.cumProfit() >= 0 ? 'plus' : 'minus'}">${fmt(this.cumProfit())}G</b>
           <small>（ランクBの目安：スコア20,000G〜）</small></div>
-        <div class="btnRow"><button id="nextBtn" class="primary">${this.s.month >= 12 || this.s.bankrupt ? '📊 年度決算へ' : '▶ 次の月へ'}</button></div>
+        <div class="btnRow">
+          <button id="bsBtn">🏦 B/S</button>
+          <button id="nextBtn" class="primary">${this.s.month >= 12 || this.s.bankrupt ? '📊 年度決算へ' : '▶ 次の月へ'}</button>
+        </div>
       </div>`;
     this.panel.querySelector('#whyBtn')!.addEventListener('click', () => {
       this.panel.querySelector('#whyBox')!.classList.toggle('hidden');
+    });
+    this.panel.querySelector('#bsBtn')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.panel.querySelector('#bsBox')!.classList.toggle('hidden');
     });
     this.panel.querySelector('#nextBtn')!.addEventListener('click', () => {
       unlockAudio(); SE.decide();
@@ -1128,9 +1180,15 @@ export class App {
       const cost = nextCost(this.meta, node);
       const btn = cost === null
         ? '<span class="labMax">MAX</span>'
-        : `<button class="mini labBuy" data-id="${node.id}" ${this.meta.noren >= cost ? '' : 'disabled'}>${cost}P</button>`;
+        : `<button class="mini labBuy" data-id="${node.id}" ${this.meta.noren >= cost ? '' : 'disabled'}>${cost}Pで強化</button>`;
+      // 「いま→次」を数字で見せる（例: 10頭 → 15頭）
+      const nowNext = node.base != null && node.step != null
+        ? (cost === null
+          ? `いま${fmt(node.base + node.step * lv)}${node.unit}`
+          : `いま${fmt(node.base + node.step * lv)}${node.unit} → <b>${fmt(node.base + node.step * (lv + 1))}${node.unit}</b>`)
+        : node.effect;
       return `<div class="labRow">
-        <span class="labName">${node.icon} ${node.name} <small>Lv${lv}/${node.costs.length}・${node.effect}</small></span>
+        <span class="labName">${node.icon} ${node.name} <small>Lv${lv}/${node.costs.length}・${nowNext}</small></span>
         ${btn}
       </div>`;
     }).join('');

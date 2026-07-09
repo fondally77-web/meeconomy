@@ -8,20 +8,23 @@ export interface LabNode {
   name: string;
   effect: string;          // 1段あたりの効果
   costs: number[];         // 段ごとのコスト（のれんP）
+  base?: number;           // 現在値→次の値の表示用
+  step?: number;
+  unit?: string;
 }
 
 export const LAB_NODES: LabNode[] = [
-  { id: 'farm',    icon: '🐑', name: '飼育枠',       effect: '+5頭',            costs: [2, 4, 7] },
-  { id: 'shear',   icon: '✂️', name: '毛刈り班',     effect: '+3頭/月',         costs: [2, 4] },
-  { id: 'meat',    icon: '🥩', name: 'と畜ライン',   effect: '+3頭/月',         costs: [2, 4, 7] },
-  { id: 'delica',  icon: '🍖', name: 'デリカ加工',   effect: '+4箱/月',         costs: [3, 5, 8] },
-  { id: 'wool',    icon: '🧶', name: '紡績機',       effect: '+4袋/月',         costs: [2, 4] },
-  { id: 'apparel', icon: '👕', name: '縫製ライン',   effect: '+3着/月',         costs: [3, 5, 8] },
-  { id: 'sales',   icon: '🏪', name: '販売網',       effect: '+15箱/月',        costs: [3, 6] },
-  { id: 'trucks',  icon: '🚚', name: 'トラック',     effect: '+1台',            costs: [2, 3, 5, 8, 12] },
-  { id: 'fridge',  icon: '🧊', name: '冷蔵庫',       effect: '肉系の鮮度+1ヶ月', costs: [4] },
-  { id: 'cash',    icon: '💰', name: '開始資金',     effect: '+5,000G',         costs: [2, 3, 4] },
-  { id: 'meez',    icon: '⚾', name: 'メェーズ補強', effect: 'チーム力+10',      costs: [5, 8] },
+  { id: 'farm',    icon: '🐑', name: '飼育枠',       effect: '+5頭',            costs: [2, 4, 7], base: 10, step: 5, unit: '頭' },
+  { id: 'shear',   icon: '✂️', name: '毛刈り班',     effect: '+3頭/月',         costs: [2, 4], base: 6, step: 3, unit: '頭/月' },
+  { id: 'meat',    icon: '🥩', name: 'と畜ライン',   effect: '+3頭/月',         costs: [2, 4, 7], base: 6, step: 3, unit: '頭/月' },
+  { id: 'delica',  icon: '🍖', name: 'デリカ加工',   effect: '+4箱/月',         costs: [3, 5, 8], base: 6, step: 4, unit: '箱/月' },
+  { id: 'wool',    icon: '🧶', name: '紡績機',       effect: '+4袋/月',         costs: [2, 4], base: 8, step: 4, unit: '袋/月' },
+  { id: 'apparel', icon: '👕', name: '縫製ライン',   effect: '+3着/月',         costs: [3, 5, 8], base: 5, step: 3, unit: '着/月' },
+  { id: 'sales',   icon: '🏪', name: '販売網',       effect: '+15箱/月',        costs: [3, 6], base: 35, step: 15, unit: '箱/月' },
+  { id: 'trucks',  icon: '🚚', name: 'トラック',     effect: '+1台',            costs: [2, 3, 5, 8, 12], base: 3, step: 1, unit: '台' },
+  { id: 'fridge',  icon: '🧊', name: '冷蔵庫',       effect: '肉系の鮮度 2→3ヶ月', costs: [4] },
+  { id: 'cash',    icon: '💰', name: '開始資金',     effect: '+5,000G',         costs: [2, 3, 4], base: 30000, step: 5000, unit: 'G' },
+  { id: 'meez',    icon: '⚾', name: 'メェーズ補強', effect: 'チーム力+10（ブランド↑）', costs: [5, 8], base: 50, step: 10, unit: '' },
   { id: 'buddy',   icon: '🧚', name: 'ズレ探しの相棒', effect: '制限+15秒＆ヒント1回', costs: [3] },
 ];
 
