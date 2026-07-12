@@ -145,6 +145,15 @@ table.pl tr.star td { color: var(--gold); font-size: 16px; }
   50% { filter: brightness(1.6); }
 }
 
+/* タイトル・ストーリー */
+.titleWin { text-align: center; }
+.titleLogo { font-size: 30px; color: var(--gold); margin: 14px 0 4px; text-shadow: 2px 2px 0 #000; }
+.titleCoin { display: inline-block; animation: coinSpin 2.4s ease-in-out infinite; }
+@keyframes coinSpin { 50% { transform: rotateY(180deg); } }
+.titleSub { font-size: 14px; opacity: .85; margin-bottom: 12px; }
+.introText { text-align: left; font-size: 16px; line-height: 1.8; min-height: 96px; padding: 6px 2px; }
+.introText b { color: var(--gold); }
+
 /* ラボ */
 .labRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px dashed rgba(245, 242, 232, .2); }
 .labRow .labName { font-size: 15px; }

@@ -157,7 +157,99 @@ export class App {
     });
     this.s = this.newRun();
     this.view.setState(this.s);
-    this.pushFeed('🐑 新しい年度がはじまりました（4月）');
+    this.titlePhase();
+  }
+
+  // ── S01 タイトル ──
+  private hasSave(): boolean {
+    return this.meta.runs > 0 || this.meta.noren > 0 || Object.keys(this.meta.upgrades).length > 0;
+  }
+
+  private titlePhase(): void {
+    this.view.setScene('map');
+    this.view.setTool(null);
+    this.renderHud();
+    const save = this.hasSave();
+    this.panel.innerHTML = `
+      <div class="tkwin titleWin">
+        <div class="titleLogo">🐑 メェコノミー <span class="titleCoin">🪙</span></div>
+        <div class="titleSub">刈るか、肉にするか。──れんけつ経営ローグライト</div>
+        ${save ? `<div class="note">📖 セーブデータ：${this.meta.runs}期おわり・のれん${this.meta.noren}P・ベスト${this.meta.bestRank}</div>` : ''}
+        <div class="btnRow">
+          ${save ? '<button id="contBtn" class="primary">📖 つづきから</button>' : ''}
+          <button id="titleStart" class="${save ? '' : 'primary'}">🌱 はじめから</button>
+        </div>
+      </div>`;
+    this.texel('ようこそ。仕訳の精、テクセルです。メェ');
+    this.panel.querySelector('#contBtn')?.addEventListener('click', () => {
+      unlockAudio(); SE.buy();
+      this.beginPeriod();
+    });
+    this.panel.querySelector('#titleStart')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      if (this.hasSave()) this.confirmReset();
+      else this.intro();
+    });
+  }
+
+  private confirmReset(): void {
+    this.panel.innerHTML = `
+      <div class="tkwin titleWin">
+        <div class="note">⚠️ はじめからにすると、セーブ（${this.meta.runs}期・のれん${this.meta.noren}P・ラボ強化）は消えます。いいですか？</div>
+        <div class="btnRow">
+          <button id="backBtn">← もどる</button>
+          <button id="wipeBtn">🗑 消してはじめから</button>
+        </div>
+      </div>`;
+    this.panel.querySelector('#backBtn')!.addEventListener('click', () => { SE.decide(); this.titlePhase(); });
+    this.panel.querySelector('#wipeBtn')!.addEventListener('click', () => {
+      SE.deny();
+      this.meta = { noren: 0, totalNoren: 0, runs: 0, bestRank: '-', upgrades: {} };
+      saveMeta(this.meta);
+      this.s = this.newRun();
+      this.view.setState(this.s);
+      this.intro();
+    });
+  }
+
+  // ── ストーリー導入（台本03の口調で） ──
+  private intro(page = 0): void {
+    const pages: { scene: Parameters<PipelineView['setScene']>[0]; text: string }[] = [
+      { scene: 'farm', text: 'ここはメェダウ平原。<b>羊</b>がすべての真ん中にいる土地です。<br>毛を刈れば服になり、お肉になればごちそうになる。<br>……そして、どちらもお金になります' },
+      { scene: 'map', text: 'あなたは今日から<b>メェコノミーグループ</b>の社長。<br>ファーム・ミート・デリカ・ウール・アパレル・セールス・ロジ、<br><b>7つの会社</b>がぜんぶ、あなたの群れです' },
+      { scene: 'farm', text: 'ボクはテクセル。経理部に代々住みつく<b>仕訳の精</b>です。<br>社長の仕事はひとつの二択。<br><b>✂️刈って持ち続けるか、🔪売って現金にするか</b>。メェ' },
+      { scene: 'market', text: 'ゴールは<b>1年（12ヶ月）の決算</b>。れんけつ利益でランクが決まり、<br><b>のれん（信用）</b>が貯まって、次の期はもっと大きく戦えます。<br>⚾地元球団メェーズの調子も、実は売上に効きますよ' },
+      { scene: 'farm', text: 'それでは第1期、<b>開幕</b>です。<br>まずは✂️を選んで、もこもこの羊をタップ。<br>いってらっしゃい、社長！' },
+    ];
+    const p = pages[page];
+    this.view.setScene(p.scene);
+    this.panel.innerHTML = `
+      <div class="tkwin titleWin">
+        <div class="introText">${p.text}</div>
+        <div class="btnRow">
+          <button id="introSkip">⏩ スキップ</button>
+          <button id="introNext" class="primary">${page < pages.length - 1 ? '▶ つぎへ' : '🐑 開幕！'}</button>
+        </div>
+      </div>`;
+    this.texel(`📖 ものがたり ${page + 1}/${pages.length}`);
+    this.panel.querySelector('#introNext')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      if (page < pages.length - 1) this.intro(page + 1);
+      else { SE.fanfare(); this.beginPeriod(); }
+    });
+    this.panel.querySelector('#introSkip')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.beginPeriod();
+    });
+  }
+
+  /** 期の開幕（口上つき） */
+  private beginPeriod(): void {
+    const period = this.meta.runs + 1;
+    const goal = this.meta.bestRank !== '-' && this.meta.bestRank !== 'FAIL'
+      ? `目標：ベスト「${this.meta.bestRank}」超え！`
+      : '目標：まずは黒字でランクB！';
+    this.pushFeed(`📖 第${period}期 開幕！ ${goal}`);
     this.startMonth();
   }
 
@@ -1220,8 +1312,7 @@ export class App {
   private restartRun(): void {
     this.s = this.newRun();
     this.view.setState(this.s);
-    this.pushFeed('🐑 新しい年度がはじまりました（4月）');
-    this.startMonth();
+    this.beginPeriod();
   }
 }
 
