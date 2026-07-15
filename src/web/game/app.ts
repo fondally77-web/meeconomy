@@ -27,8 +27,10 @@ import {
 import type { EngineOptions, GoodsId, LedgerRow } from '../../game/types.js';
 import { judgePuzzle } from '../../game/puzzle/ledgerGap.js';
 import {
-  LAB_NODES, loadMeta, saveMeta, levelOf, nextCost, betterRank, type MetaState,
+  LAB_NODES, loadMeta, saveMeta, levelOf, nextCost, betterRank, emptyMeta, type MetaState,
 } from './meta.js';
+import { ACHIEVEMENTS, DIARY, achievementById } from './achievements.js';
+import { startBgmIfWanted, toggleBgm } from './bgm.js';
 
 const fmt = (v: number) => Math.round(v).toLocaleString('ja-JP');
 
@@ -63,6 +65,7 @@ export class App {
   private doSlaughter: (() => void) | null = null;
   private lambsLastMonth = 0;            // 先月買った子羊（今月「おとなに！」）
   private autoSkip = false;              // おまかせ再生の早送り
+  private lastNews = '';                 // テロップ用の直近メェーズニュース
   private comboN = 0;                    // 連続作業コンボ
   private comboAt = 0;
   private puzzleTimer: ReturnType<typeof setInterval> | null = null;
@@ -74,6 +77,13 @@ export class App {
   private engineOpts: EngineOptions = {};
   private baseShearCap = SHEAR_CAPACITY;
   private hintUsed = false;
+  private toastQueue: string[] = [];
+  private toastBusy = false;
+  private viaOmakase = false;
+  private runStats = {
+    sheared: 0, shipped: 0, slaughtered: 0, coats: 0,
+    stances: new Set<string>(), allOmakase: true,
+  };
   private feed: string[] = [];
   private unread = 0;
   private view: PipelineView;
@@ -91,6 +101,7 @@ export class App {
           <span class="meez" id="hudMeez"></span>
           <button id="hudBell" class="bell">🔔<span id="bellN"></span></button>
         </div>
+        <div id="ticker" class="hidden"><span id="tickerText"></span></div>
         <div id="stage"><canvas id="game" width="${CW}" height="${CH}"
           aria-label="メェコノミーのパイプライン。上段がウールライン、下段が肉ライン"></canvas></div>
         <div class="tkwin" id="texelWin"><div id="texel"></div></div>
@@ -179,8 +190,13 @@ export class App {
           ${save ? '<button id="contBtn" class="primary">📖 つづきから</button>' : ''}
           <button id="titleStart" class="${save ? '' : 'primary'}">🌱 はじめから</button>
         </div>
+        ${save ? '<div class="btnRow"><button id="titleAch">🏆 じっせき・創業日記</button></div>' : ''}
       </div>`;
     this.texel('ようこそ。仕訳の精、テクセルです。メェ');
+    this.panel.querySelector('#titleAch')?.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.achievementsPhase(() => this.titlePhase());
+    });
     this.panel.querySelector('#contBtn')?.addEventListener('click', () => {
       unlockAudio(); SE.buy();
       this.beginPeriod();
@@ -204,7 +220,7 @@ export class App {
     this.panel.querySelector('#backBtn')!.addEventListener('click', () => { SE.decide(); this.titlePhase(); });
     this.panel.querySelector('#wipeBtn')!.addEventListener('click', () => {
       SE.deny();
-      this.meta = { noren: 0, totalNoren: 0, runs: 0, bestRank: '-', upgrades: {} };
+      this.meta = emptyMeta();
       saveMeta(this.meta);
       this.s = this.newRun();
       this.view.setState(this.s);
@@ -248,6 +264,9 @@ export class App {
 
   /** 期の開幕（口上つき） */
   private beginPeriod(): void {
+    startBgmIfWanted();
+    this.runStats = { sheared: 0, shipped: 0, slaughtered: 0, coats: 0, stances: new Set(), allOmakase: true };
+    this.viaOmakase = false;
     const period = this.meta.runs + 1;
     const goal = this.meta.bestRank !== '-' && this.meta.bestRank !== 'FAIL'
       ? `目標：ベスト「${this.meta.bestRank}」超え！`
@@ -345,6 +364,48 @@ export class App {
     this.popText(60, 176, `✨金の毛！+${fmt(GOLDEN_WOOL_BONUS)}G`, '#ffd24a');
     this.pushFeed(`✨ 金の毛を好事家が${fmt(GOLDEN_WOOL_BONUS)}Gで買い取り`);
     this.texel('金色の毛！？めったに出ない逸品です。好事家が高値で…');
+    this.unlock('goldWool');
+  }
+
+  // ── 🏆実績 ──
+  private unlock(id: string): void {
+    const a = achievementById(id);
+    if (!a || !a.ready || this.meta.achievements.includes(id)) return;
+    this.meta.achievements.push(id);
+    saveMeta(this.meta);
+    this.pushFeed(`🏆 実績解除：${a.icon}${a.name}`);
+    this.toastQueue.push(`🏆 実績解除！ ${a.icon} <b>${a.name}</b>`);
+    this.runToasts();
+  }
+
+  private runToasts(): void {
+    if (this.toastBusy) return;
+    const msg = this.toastQueue.shift();
+    if (!msg) return;
+    this.toastBusy = true;
+    SE.unlock();
+    const el = document.createElement('div');
+    el.className = 'achToast';
+    el.innerHTML = msg;
+    document.querySelector('#wrap')!.appendChild(el);
+    setTimeout(() => {
+      el.remove();
+      this.toastBusy = false;
+      this.runToasts();
+    }, 2400);
+  }
+
+  /** 月次ニュースのテロップ */
+  private setTicker(text: string): void {
+    const bar = document.querySelector('#ticker')!;
+    const span = document.querySelector<HTMLElement>('#tickerText')!;
+    if (!text) { bar.classList.add('hidden'); return; }
+    bar.classList.remove('hidden');
+    // ノードを差し替えてアニメーションを最初から
+    const fresh = span.cloneNode(false) as HTMLElement;
+    fresh.textContent = text;
+    span.replaceWith(fresh);
+    fresh.id = 'tickerText';
   }
 
   private shearCap(): number {
@@ -415,6 +476,11 @@ export class App {
     if (this.eventId !== 'none') {
       this.pushFeed(`${MONTH_LABELS[s.month]}: ${EVENT_NAMES[this.eventId]}`);
     }
+    this.setTicker([
+      `📖 第${this.meta.runs + 1}期 ${MONTH_LABELS[s.month]}`,
+      this.eventId !== 'none' ? `📰 ${EVENT_NAMES[this.eventId]}` : '',
+      this.lastNews ? `⚾ ${this.lastNews}` : '',
+    ].filter(Boolean).join('　◆　'));
     this.stageFarm();
   }
 
@@ -877,6 +943,15 @@ export class App {
     this.view.setTool(null);
     this.view.setScene('market');
     this.lambsLastMonth = this.draft.lambsToBuy;
+    // 実績用のラン統計
+    const rs = this.runStats;
+    rs.sheared += this.draft.sheepToShear;
+    rs.shipped += this.draft.sheepToShip;
+    rs.slaughtered += this.draft.slaughterQty;
+    rs.coats += this.draft.apparelRecipes.coat ?? 0;
+    rs.stances.add(this.draft.priceStance);
+    if (!this.viaOmakase) rs.allOmakase = false;
+    this.viaOmakase = false;
     // 使い残した金の毛は来月へ持ち越し（在庫が残っていれば）
     this.goldCarry = {
       farmWool: this.im.goldFarmWool, woolWool: this.im.goldWoolWool,
@@ -905,6 +980,7 @@ export class App {
 
   /** 🤖おまかせ：テクセルが全工程を目の前で代行（⏩で早送り） */
   private async runOmakase(): Promise<void> {
+    this.viaOmakase = true;
     const o = balancedBot(this.s, SHEAR_CAPACITY);
     const d = this.draft;
     const im = this.im;
@@ -1063,7 +1139,16 @@ export class App {
     this.view.setState(next);
     this.view.setTrucksLeft(next.logi.trucks);
     this.renderHud();
-    if (r.ballparkNews) this.pushFeed(`⚾ ${r.ballparkNews}`);
+    if (r.ballparkNews) {
+      this.pushFeed(`⚾ ${r.ballparkNews}`);
+      this.lastNews = r.ballparkNews;
+    }
+    // メェーズ実績
+    if (this.s.ballpark.leagueChampion) {
+      this.unlock('meezChamp');
+      if (levelOf(this.meta, 'meez') === 0) this.unlock('meezMiracle');
+    }
+    if (this.s.ballpark.japanChampion) this.unlock('meezJapan');
     if (next.puzzle) {
       this.puzzlePhase(r);
       return;
@@ -1101,6 +1186,8 @@ export class App {
       </div>`;
 
     let remain = p.timeLimitSec + 15 * levelOf(this.meta, 'buddy');
+    let wrongTaps = 0;
+    const startedAt = Date.now();
     this.hintUsed = false;
     this.panel.querySelector('#pzTime')!.textContent = String(remain);
     this.panel.querySelector('#pzHint')?.addEventListener('click', () => {
@@ -1122,6 +1209,17 @@ export class App {
         SE.fanfare();
         this.renderHud();
         this.pushFeed(`🧾 ズレを発見！【${GAP_LABELS[p.gapType]}】 +${fmt(PUZZLE_REWARD)}G`);
+        // 実績
+        this.unlock('gapFirst');
+        if (wrongTaps === 0 && !this.hintUsed) {
+          this.meta.puzzleNoMiss++;
+          if (this.meta.puzzleNoMiss >= 5) this.unlock('gapNoMiss5');
+          if (this.meta.puzzleNoMiss >= 10) this.unlock('gapNoMiss10');
+        }
+        if ((Date.now() - startedAt) / 1000 <= 10) this.unlock('gapFast');
+        if (!this.meta.gapTypesSolved.includes(p.gapType)) this.meta.gapTypesSolved.push(p.gapType);
+        if (this.meta.gapTypesSolved.length >= 4) this.unlock('gapAllTypes');
+        saveMeta(this.meta);
       } else {
         this.pushFeed('🧾 ズレはテクセルが修正（翌月に自動反映・ペナルティなし）');
         this.texel('だいじょうぶ、修正しておきました。来月もチャンスはあります');
@@ -1165,6 +1263,7 @@ export class App {
           showContinue(true);
         } else {
           SE.deny();
+          wrongTaps++;
           btn.disabled = true;
           btn.classList.add('wrong');
           btn.insertAdjacentHTML('afterbegin', '❌ ');
@@ -1238,34 +1337,164 @@ export class App {
     if (this.s.bankrupt) this.texel('現金が尽きてしまいました…');
   }
 
-  // ── 年度決算 ──
+  // ── 年度決算（ドラムロール→ランク発表。台本03 §9） ──
   private annual(): void {
     const score = scoreRun(this.s, 0);
-    if (score.rank === 'S' || score.rank === 'SS') SE.fanfare();
-    else if (score.rank !== 'FAIL') SE.coin();
+    const prevBest = this.meta.bestRank;
     // メタ更新（のれんPを獲得して永続化）
     this.meta.noren += score.norenEarned;
     this.meta.totalNoren += score.norenEarned;
     this.meta.runs++;
     this.meta.bestRank = betterRank(this.meta.bestRank, score.rank);
+    if (this.s.disposedTotal === 0 && score.rank !== 'FAIL') this.meta.noDisposalStreak++;
+    else this.meta.noDisposalStreak = 0;
     saveMeta(this.meta);
+    this.checkRunAchievements(score);
+    this.setTicker('');
+    this.view.setScene('map');
+    // スロット式カウントアップ＋ドラムロール
+    this.panel.innerHTML = `
+      <div class="tkwin annual">
+        <div class="secTitle">📊 年度決算 <small>${this.meta.runs}期目</small></div>
+        <div class="rankBig" id="drumScore">0G</div>
+        <div class="note" style="text-align:center">スコア集計中…</div>
+      </div>`;
+    this.texel('決算のじかんです。ドキドキしますね……');
+    const el = this.panel.querySelector('#drumScore')!;
+    const dur = 1600;
+    const t0 = performance.now();
+    const drum = setInterval(() => SE.tick(), 70);
+    const step = (now: number) => {
+      const t = Math.min(1, (now - t0) / dur);
+      el.textContent = `${fmt(Math.round(score.score * (t * t)))}G`;
+      if (t < 1) requestAnimationFrame(step);
+      else { clearInterval(drum); this.revealAnnual(score, prevBest); }
+    };
+    requestAnimationFrame(step);
+  }
+
+  private revealAnnual(score: ReturnType<typeof scoreRun>, prevBest: string): void {
+    if (score.rank === 'S' || score.rank === 'SS') SE.fanfare();
+    else if (score.rank !== 'FAIL') SE.coin();
+    else SE.deny();
     const bonusRows = score.bonuses.map(b => `<div class="bonus">✅ ${b.label} <b>+${fmt(b.amount)}G</b></div>`).join('')
       || '<div class="bonus dim">ボーナスなし</div>';
     this.panel.innerHTML = `
-      <div class="tkwin annual">
+      <div class="tkwin annual ${score.rank === 'FAIL' ? 'failDark' : ''}">
         <div class="secTitle">📊 年度決算 <small>${this.meta.runs}期目・自己ベスト${this.meta.bestRank}</small></div>
-        <div class="rankBig rank${score.rank}">${score.rank === 'FAIL' ? '倒産…' : `ランク ${score.rank}`}</div>
+        <div class="rankBig rank${score.rank} rankIn">${score.rank === 'FAIL' ? '倒産…' : `ランク ${score.rank}`}</div>
         <div class="scoreRow">スコア <b>${fmt(score.score)}G</b>（連結利益 ${fmt(score.consolidatedProfitTotal)}G）</div>
+        ${score.rank === 'FAIL' && score.failReason ? `<div class="scoreRow minus">${score.failReason}</div>` : ''}
         ${bonusRows}
         <div class="scoreRow">のれんP <b>+${score.norenEarned}P</b>（所持 ${this.meta.noren}P）</div>
         <div class="btnRow">
-          <button id="againBtn">🐑 すぐもう一度</button>
-          <button id="labBtn" class="primary">🔬 ラボで強化する</button>
+          <button id="achBtn">🏆 じっせき</button>
+          <button id="againBtn">🐑 もう一度</button>
+          <button id="labBtn" class="primary">🔬 ラボで強化</button>
         </div>
       </div>`;
-    this.texel(RANK_COMMENTS[score.rank] ?? '');
+    // 紙吹雪（A以上）
+    if (score.rank === 'A' || score.rank === 'S' || score.rank === 'SS') {
+      const wrap = document.querySelector('#wrap')!;
+      for (let i = 0; i < 26; i++) {
+        const c = document.createElement('div');
+        c.className = 'confetti';
+        c.style.left = `${Math.random() * 100}%`;
+        c.style.background = ['#ffd24a', '#9fe8a8', '#9fd0ff', '#f3b0dd'][i % 4];
+        c.style.animationDelay = `${Math.random() * 0.8}s`;
+        wrap.appendChild(c);
+        setTimeout(() => c.remove(), 3200);
+      }
+    }
+    // テクセルの決算コメント（S初回は特別台詞・台本03 §9）
+    const firstS = (score.rank === 'S' || score.rank === 'SS')
+      && prevBest !== 'S' && prevBest !== 'SS';
+    if (score.rank === 'FAIL') {
+      this.texel('大丈夫。帳簿は消えても、のれんは残ります。もう1年やりましょ');
+    } else if (firstS) {
+      this.texel('……歴代の社長を見てきましたが、あなたは<b>本物</b>です');
+    } else {
+      this.texel(RANK_COMMENTS[score.rank] ?? '');
+    }
+    this.panel.querySelector('#achBtn')!.addEventListener('click', () => { unlockAudio(); SE.decide(); this.achievementsPhase(() => this.revealAnnual(score, prevBest)); });
     this.panel.querySelector('#againBtn')!.addEventListener('click', () => { unlockAudio(); SE.buy(); this.restartRun(); });
     this.panel.querySelector('#labBtn')!.addEventListener('click', () => { unlockAudio(); SE.decide(); this.labPhase(); });
+  }
+
+  /** ラン終了時の実績判定 */
+  private checkRunAchievements(score: ReturnType<typeof scoreRun>): void {
+    const rs = this.runStats;
+    const has = (label: string) => score.bonuses.some(b => b.label.includes(label));
+    this.unlock('firstRun');
+    if (score.consolidatedProfitTotal > 0) this.unlock('firstBlack');
+    const order = ['B', 'A', 'S', 'SS'];
+    const idx = order.indexOf(score.rank);
+    for (let i = 0; i <= idx; i++) this.unlock(`rank${order[i]}`);
+    if (this.meta.totalNoren >= 10) this.unlock('noren10');
+    if (this.meta.totalNoren >= 30) this.unlock('noren30');
+    if (this.meta.totalNoren >= 60) this.unlock('noren60');
+    if (this.meta.totalNoren >= 100) this.unlock('noren100');
+    if (LAB_NODES.every(n => levelOf(this.meta, n.id) >= n.costs.length)) this.unlock('allLab');
+    if (this.meta.runs >= 10) this.unlock('run10');
+    if (this.meta.runs >= 30) this.unlock('run30');
+    if (has('廃棄ゼロ')) this.unlock('noWaste1');
+    if (this.meta.noDisposalStreak >= 3) this.unlock('noWaste3');
+    if (has('全月れんけつ黒字')) this.unlock('allBlack');
+    if (has('二刀流')) this.unlock('twoWay');
+    const minCash = Math.min(...this.s.history.map(m => m.cashEnd));
+    if (minCash < 5_000 && score.consolidatedProfitTotal > 0) this.unlock('comeback');
+    if (rs.shipped === 0 && rs.slaughtered === 0 && idx >= 1) this.unlock('fluffy');
+    if (rs.sheared === 0 && idx >= 1) this.unlock('ruthless');
+    if (rs.stances.size === 1 && rs.stances.has('aggressive')) this.unlock('aggOnly');
+    if (rs.stances.size === 1 && rs.stances.has('discount')) this.unlock('discOnly');
+    if (rs.allOmakase && idx >= 0) this.unlock('grazing');
+    if (rs.coats >= 5) this.unlock('coat5');
+  }
+
+  // ── 🏆じっせき・📔創業日記 ──
+  private achievementsPhase(back: () => void): void {
+    const got = new Set(this.meta.achievements);
+    const n = this.meta.achievements.length;
+    const rows = ACHIEVEMENTS.map(a => `
+      <div class="achRow ${got.has(a.id) ? 'got' : ''}">
+        <span class="achIcon">${got.has(a.id) ? a.icon : '🔒'}</span>
+        <span class="achBody"><b>${a.name}</b><br><small>${a.desc}${a.ready ? '' : '（準備中）'}</small></span>
+      </div>`).join('');
+    const diaryRows = DIARY.map((d, i) => {
+      const open = n >= d.need;
+      return `<button class="diaryBtn" data-i="${i}" ${open ? '' : 'disabled'}>
+        ${open ? `📔 ${d.title}` : `🔒 じっせき${d.need}個で解錠`}</button>`;
+    }).join('');
+    this.panel.innerHTML = `
+      <div class="tkwin ach">
+        <div class="secTitle">🏆 じっせき <small>${n}/${ACHIEVEMENTS.length}</small></div>
+        <div class="achGrid">${rows}</div>
+        <div class="secTitle">📔 創業日記 <small>じっせきを集めると初代の日記が読めます</small></div>
+        <div class="diaryList">${diaryRows}</div>
+        <div class="btnRow"><button id="achBack" class="primary">← もどる</button></div>
+      </div>`;
+    this.texel(`じっせき ${n}こ。日記のつづき、気になりません？`);
+    this.panel.querySelectorAll<HTMLButtonElement>('.diaryBtn:not([disabled])').forEach(btn => {
+      btn.addEventListener('click', () => {
+        unlockAudio(); SE.decide();
+        this.diaryPhase(Number(btn.dataset.i), back);
+      });
+    });
+    this.panel.querySelector('#achBack')!.addEventListener('click', () => { unlockAudio(); SE.decide(); back(); });
+  }
+
+  private diaryPhase(i: number, back: () => void): void {
+    const d = DIARY[i];
+    this.panel.innerHTML = `
+      <div class="tkwin ach">
+        <div class="secTitle">📔 ${d.title}</div>
+        <div class="introText diaryText">${d.text}</div>
+        <div class="btnRow"><button id="diaryBack" class="primary">← 日記いちらんへ</button></div>
+      </div>`;
+    this.panel.querySelector('#diaryBack')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.achievementsPhase(back);
+    });
   }
 
   // ── 🔬ラボ ──
@@ -1292,8 +1521,15 @@ export class App {
         <div class="secTitle">🔬 ラボ <small>のれんP <b id="norenN">${this.meta.noren}</b>P</small></div>
         <div class="note">強化は<b>次のランから</b>ずっと有効。のれんPは決算のたびに貯まります</div>
         ${rows}
-        <div class="btnRow"><button id="startRun" class="primary">🐑 このつよさで開業する ▶</button></div>
+        <div class="btnRow">
+          <button id="labAch">🏆 じっせき</button>
+          <button id="startRun" class="primary">🐑 このつよさで開業 ▶</button>
+        </div>
       </div>`;
+    this.panel.querySelector('#labAch')?.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.achievementsPhase(() => this.labPhase());
+    });
     this.texel('のれん（信用）が力になります。どこを伸ばしましょう？');
     this.panel.querySelectorAll<HTMLButtonElement>('.labBuy').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1330,4 +1566,14 @@ export function bootSoundToggle(root: HTMLElement): void {
     if (isSeOn()) { unlockAudio(); SE.coin(); }
   });
   root.appendChild(btn);
+
+  const bgm = document.createElement('button');
+  bgm.id = 'bgmToggle';
+  bgm.textContent = '🎵';
+  bgm.title = 'BGM ON/OFF';
+  bgm.addEventListener('click', () => {
+    unlockAudio();
+    bgm.textContent = toggleBgm() ? '🎵' : '🚫';
+  });
+  root.appendChild(bgm);
 }

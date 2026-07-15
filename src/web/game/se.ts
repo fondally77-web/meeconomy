@@ -39,6 +39,8 @@ export const SE = {
   /** コンボ：連続作業で音程が上がる（n=連続回数） */
   combo(n: number): void { tone(520 * Math.pow(1.122, Math.min(n, 12)), 0.09, 'square', 0.11); },
   kaching(): void { tone(1175, 0.05, 'square', 0.09); setTimeout(() => tone(1568, 0.09, 'square', 0.09), 55); },
+  tick(): void { tone(170 + Math.random() * 50, 0.03, 'square', 0.07); },
+  unlock(): void { tone(784, 0.07, 'square', 0.09); setTimeout(() => tone(1175, 0.14, 'square', 0.09), 80); },
   fanfare(): void {
     [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.18, 'square', 0.10), i * 130));
   },

@@ -34,16 +34,27 @@ export interface MetaState {
   runs: number;
   bestRank: string;
   upgrades: Record<string, number>;
+  achievements: string[];        // 解除済み実績id
+  noDisposalStreak: number;      // 廃棄ゼロ連続ラン数
+  puzzleNoMiss: number;          // ノーミス正解の累計回数
+  gapTypesSolved: string[];      // 正解したズレ型
 }
 
 const KEY = 'meeconomy-meta-v1';
 
+export function emptyMeta(): MetaState {
+  return {
+    noren: 0, totalNoren: 0, runs: 0, bestRank: '-', upgrades: {},
+    achievements: [], noDisposalStreak: 0, puzzleNoMiss: 0, gapTypesSolved: [],
+  };
+}
+
 export function loadMeta(): MetaState {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { noren: 0, totalNoren: 0, runs: 0, bestRank: '-', upgrades: {}, ...JSON.parse(raw) as Partial<MetaState> };
+    if (raw) return { ...emptyMeta(), ...JSON.parse(raw) as Partial<MetaState> };
   } catch { /* 破損時は初期化 */ }
-  return { noren: 0, totalNoren: 0, runs: 0, bestRank: '-', upgrades: {} };
+  return emptyMeta();
 }
 
 export function saveMeta(m: MetaState): void {
