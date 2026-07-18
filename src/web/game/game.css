@@ -237,3 +237,22 @@ table.pl tr.star td { color: var(--gold); font-size: 16px; }
 .diaryList { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .diaryBtn { font-size: 13px; padding: 8px 4px; }
 .diaryText { font-family: inherit; }
+
+/* ずかん */
+.zukanGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; max-height: 44vh; overflow-y: auto; }
+.zukanCard {
+  border: 1px solid var(--gold); border-radius: 6px; padding: 6px;
+  font-size: 13px; line-height: 1.35; text-align: center;
+}
+.zukanCard.locked { border: 1px dashed rgba(245, 242, 232, .3); opacity: .5; }
+.zukanCard .zukanImg { height: 44px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.zukanCard img { image-rendering: pixelated; height: 40px; }
+.zukanCard small { display: block; font-size: 11px; opacity: .75; }
+.zukanCard .zukanVal { color: var(--gold); opacity: 1; }
+.sapList { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; max-height: 32vh; overflow-y: auto; }
+.sapCard {
+  border: 1px solid #6fa8ff; border-radius: 6px; padding: 6px;
+  font-size: 13px; line-height: 1.35;
+}
+.sapCard.locked { border-style: dashed; border-color: rgba(245, 242, 232, .3); opacity: .5; }
+.sapCard small { font-size: 11px; opacity: .8; }

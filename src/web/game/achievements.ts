@@ -48,9 +48,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'gapFast',     icon: '🦅', name: '鷹の目',           desc: '10秒以内に正解', ready: true },
   { id: 'gapAllTypes', icon: '🧾', name: '全型コンプ',       desc: '4種類のズレすべてに正解', ready: true },
   // ── コレクション系（3） ──
-  { id: 'zukanGoods',  icon: '📗', name: '商品図鑑コンプ',   desc: '商品図鑑を完成させる', ready: false },
-  { id: 'zukanSap',    icon: '📘', name: 'SAP図鑑コンプ',    desc: 'SAP図鑑を完成させる', ready: false },
-  { id: 'mystery',     icon: '❓', name: '???',              desc: '？？？を解放する', ready: false },
+  { id: 'zukanGoods',  icon: '📗', name: '商品図鑑コンプ',   desc: '商品図鑑を完成させる', ready: true },
+  { id: 'zukanSap',    icon: '📘', name: 'SAP図鑑コンプ',    desc: 'SAP図鑑を完成させる', ready: true },
+  { id: 'mystery',     icon: '❓', name: '???',              desc: '？？？を解放する', ready: true },
   // ── メェーズ系（3） ──
   { id: 'meezChamp',   icon: '⚾', name: 'はじめての優勝',   desc: 'メェーズがリーグ優勝', ready: true },
   { id: 'meezJapan',   icon: '🏆', name: '日本一の羊たち',   desc: 'メェーズが日本一', ready: true },

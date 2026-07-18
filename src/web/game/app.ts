@@ -27,10 +27,29 @@ import {
 import type { EngineOptions, GoodsId, LedgerRow } from '../../game/types.js';
 import { judgePuzzle } from '../../game/puzzle/ledgerGap.js';
 import {
-  LAB_NODES, loadMeta, saveMeta, levelOf, nextCost, betterRank, emptyMeta, type MetaState,
+  LAB_NODES, loadMeta, saveMeta, levelOf, nextCost, betterRank, emptyMeta,
+  DIFFICULTIES, difficultyDef, type MetaState,
 } from './meta.js';
 import { ACHIEVEMENTS, DIARY, achievementById } from './achievements.js';
+import { GOODS_CARDS, SAP_CARDS } from './zukan.js';
+import { drawSprite, type Sprite } from './sprites.js';
 import { startBgmIfWanted, toggleBgm } from './bgm.js';
+
+/** ドット絵スプライトをimg用データURLに（図鑑カード用） */
+const spriteUrlCache = new Map<Sprite, string>();
+function spriteUrl(sprite: Sprite, scale = 4): string {
+  let url = spriteUrlCache.get(sprite);
+  if (!url) {
+    const cv = document.createElement('canvas');
+    cv.width = sprite[0].length * scale;
+    cv.height = sprite.length * scale;
+    const ctx = cv.getContext('2d')!;
+    drawSprite(ctx, sprite, 0, 0, scale);
+    url = cv.toDataURL();
+    spriteUrlCache.set(sprite, url);
+  }
+  return url;
+}
 
 const fmt = (v: number) => Math.round(v).toLocaleString('ja-JP');
 
@@ -135,6 +154,7 @@ export class App {
         if (golden) this.im.goldFarmWool++;
         this.sync();
         this.updateFarmCounts();
+        this.seenGoods('wool');
         if (golden) this.goldenBonus();
         // ぜんぶ刈った！ボーナス演出
         const maxNow = Math.min(this.shearCap(), this.s.flock.ready);
@@ -186,16 +206,34 @@ export class App {
         <div class="titleLogo">🐑 メェコノミー <span class="titleCoin">🪙</span></div>
         <div class="titleSub">毛を刈って飼い続けるか、狩ってお肉にするか。──れんけつ経営ローグライト</div>
         ${save ? `<div class="note">📖 セーブデータ：${this.meta.runs}期おわり・のれん${this.meta.noren}P・ベスト${this.meta.bestRank}</div>` : ''}
+        <div class="note">むずかしさ</div>
+        <div class="stanceRow" id="diffRow">
+          ${DIFFICULTIES.map(d => `<button data-diff="${d.id}" class="${this.meta.difficulty === d.id ? 'on' : ''}">${d.icon} ${d.name}</button>`).join('')}
+        </div>
+        <div class="note dim" id="diffDesc">${difficultyDef(this.meta.difficulty).desc}</div>
         <div class="btnRow">
           ${save ? '<button id="contBtn" class="primary">📖 つづきから</button>' : ''}
           <button id="titleStart" class="${save ? '' : 'primary'}">🌱 はじめから</button>
         </div>
-        ${save ? '<div class="btnRow"><button id="titleAch">🏆 じっせき・創業日記</button></div>' : ''}
+        ${save ? '<div class="btnRow"><button id="titleAch">🏆 じっせき・日記</button><button id="titleZukan">📚 ずかん</button></div>' : ''}
       </div>`;
     this.texel('ようこそ。仕訳の精、テクセルです。メェ');
+    this.panel.querySelectorAll<HTMLButtonElement>('#diffRow button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        unlockAudio(); SE.decide();
+        this.meta.difficulty = btn.dataset.diff as MetaState['difficulty'];
+        saveMeta(this.meta);
+        this.panel.querySelectorAll('#diffRow button').forEach(b => b.classList.toggle('on', b === btn));
+        this.panel.querySelector('#diffDesc')!.textContent = difficultyDef(this.meta.difficulty).desc;
+      });
+    });
     this.panel.querySelector('#titleAch')?.addEventListener('click', () => {
       unlockAudio(); SE.decide();
       this.achievementsPhase(() => this.titlePhase());
+    });
+    this.panel.querySelector('#titleZukan')?.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.zukanPhase(() => this.titlePhase());
     });
     this.panel.querySelector('#contBtn')?.addEventListener('click', () => {
       unlockAudio(); SE.buy();
@@ -262,9 +300,11 @@ export class App {
     });
   }
 
-  /** 期の開幕（口上つき） */
+  /** 期の開幕（口上つき）。難易度・ラボ強化を反映してランを作り直す */
   private beginPeriod(): void {
     startBgmIfWanted();
+    this.s = this.newRun();
+    this.view.setState(this.s);
     this.runStats = { sheared: 0, shipped: 0, slaughtered: 0, coats: 0, stances: new Set(), allOmakase: true };
     this.viaOmakase = false;
     const period = this.meta.runs + 1;
@@ -289,6 +329,10 @@ export class App {
     s.logi.trucks += lv('trucks');
     s.cash += 5_000 * lv('cash');
     s.ballpark.teamPower = 50 + 10 * lv('meez');
+    // 難易度補正
+    const diff = difficultyDef(this.meta.difficulty);
+    s.cash = Math.max(5_000, s.cash + diff.cashBonus);
+    s.logi.trucks = Math.max(1, s.logi.trucks + diff.truckBonus);
     this.baseShearCap = SHEAR_CAPACITY + 3 * lv('shear');
     this.engineOpts = { shearCapacity: this.baseShearCap, fridge: lv('fridge') > 0 };
     return s;
@@ -365,6 +409,38 @@ export class App {
     this.pushFeed(`✨ 金の毛を好事家が${fmt(GOLDEN_WOOL_BONUS)}Gで買い取り`);
     this.texel('金色の毛！？めったに出ない逸品です。好事家が高値で…');
     this.unlock('goldWool');
+  }
+
+  // ── 📗商品図鑑への登録 ──
+  private seenGoods(id: string): void {
+    if (this.meta.goodsSeen.includes(id)) return;
+    const card = GOODS_CARDS.find(c => c.id === id);
+    if (!card) return;
+    this.meta.goodsSeen.push(id);
+    saveMeta(this.meta);
+    this.pushFeed(`📗 図鑑に追加：${card.name}`);
+    // コンプ判定（？？？以外の全13種）
+    const base = GOODS_CARDS.filter(c => c.id !== 'mystery');
+    if (base.every(c => this.meta.goodsSeen.includes(c.id)) && !this.meta.goodsSeen.includes('mystery')) {
+      this.meta.goodsSeen.push('mystery');
+      saveMeta(this.meta);
+      this.toastQueue.push('📗 図鑑コンプ！<b>？？？</b>のページが開いた…');
+      this.runToasts();
+      this.unlock('zukanGoods');
+      this.unlock('mystery');
+    }
+  }
+
+  /** SAPカードを1枚獲得（ズレ探し正解の報酬） */
+  private grantSapCard(): void {
+    if (this.meta.sapCards >= SAP_CARDS.length) return;
+    const card = SAP_CARDS[this.meta.sapCards];
+    this.meta.sapCards++;
+    saveMeta(this.meta);
+    this.pushFeed(`📘 SAPカード獲得：${card.code}（${card.name}）`);
+    this.toastQueue.push(`📘 SAPカード <b>${card.code}</b> を獲得！`);
+    this.runToasts();
+    if (this.meta.sapCards >= SAP_CARDS.length) this.unlock('zukanSap');
   }
 
   // ── 🏆実績 ──
@@ -709,6 +785,7 @@ export class App {
         this.popText(76, 66, `🧶x${YARN_PER_WOOL}`, '#9fd0ff');
       }
       this.comboHit(76, 40);
+      this.seenGoods('yarn');
       return true;
     };
     const slaughter = () => {
@@ -720,6 +797,7 @@ export class App {
       this.comboHit(236, 40);
       this.view.craftPop('right', MEATBOX);
       this.popText(236, 66, `🥩x${MEAT_PER_SHEEP}`, '#ff9c9c');
+      this.seenGoods('lambMeat');
       return true;
     };
     this.doSpin = () => { if (spin()) { this.sync(); this.stageWork(); } };
@@ -853,6 +931,7 @@ export class App {
           this.view.craftPop('left', gold ? goldify(goodsSprite(rid)) : goodsSprite(rid));
           this.comboHit(76, 40);
           this.popText(76, 66, gold ? `✨金の${RECIPE_NAMES[rid]}！` : `👕${RECIPE_NAMES[rid]}！`, gold ? '#ffd24a' : '#f3b0dd');
+          this.seenGoods(rid);
         } else {
           if (this.im.delicaMeat < def.inputQty) return;
           this.im.delicaMeat -= def.inputQty;
@@ -863,6 +942,7 @@ export class App {
           this.view.craftPop('right', goodsSprite(rid));
           this.comboHit(236, 40);
           this.popText(236, 66, `🍖${RECIPE_NAMES[rid]}！`, '#ffc98a');
+          this.seenGoods(rid);
         }
         this.sync();
         this.stageCraft();
@@ -1008,6 +1088,7 @@ export class App {
       if (!res) break;
       d.sheepToShear++;
       im.farmWool++;
+      this.seenGoods('wool');
       if (res.golden) { im.goldFarmWool++; this.goldenBonus(); }
       this.sync();
       await this.wait(260);
@@ -1043,12 +1124,14 @@ export class App {
         const goldSpin = im.goldWoolWool > 0;
         d.spinQty++; im.woolWool--; im.woolYarn += YARN_PER_WOOL;
         if (goldSpin) { im.goldWoolWool--; im.goldWoolYarn += YARN_PER_WOOL; }
+        this.seenGoods('yarn');
         SE.pop(); this.view.craftPop('left', goldSpin ? GOLD_YARNROLL : YARNROLL); this.sync();
         await this.wait(200);
       }
       const slN = Math.min(o.slaughterQty, this.s.companies.meat.capacity, im.meatSheep);
       for (let i = 0; i < slN; i++) {
         d.slaughterQty++; im.meatSheep--; im.meatMeat += MEAT_PER_SHEEP;
+        this.seenGoods('lambMeat');
         SE.pop(); this.view.craftPop('right', MEATBOX); this.sync();
         await this.wait(200);
       }
@@ -1084,6 +1167,7 @@ export class App {
           im.apparelYarn -= def.inputQty; im.apparelGoods++; aMade++;
           const gold = goldUse > 0;
           this.apparelList.push({ g: rid, gold });
+          this.seenGoods(rid);
           d.apparelRecipes[rid as keyof typeof d.apparelRecipes] =
             (d.apparelRecipes[rid as keyof typeof d.apparelRecipes] ?? 0) + 1;
           SE.pop(); this.view.craftPop('left', gold ? goldify(goodsSprite(rid)) : goodsSprite(rid)); this.sync();
@@ -1095,6 +1179,7 @@ export class App {
         for (let i = 0; i < (n ?? 0) && dMade < dCap && im.delicaMeat >= def.inputQty; i++) {
           im.delicaMeat -= def.inputQty; im.delicaGoods++; dMade++;
           this.delicaList.push({ g: rid, gold: false });
+          this.seenGoods(rid);
           d.meatRecipes[rid as keyof typeof d.meatRecipes] =
             (d.meatRecipes[rid as keyof typeof d.meatRecipes] ?? 0) + 1;
           SE.pop(); this.view.craftPop('right', goodsSprite(rid)); this.sync();
@@ -1220,6 +1305,7 @@ export class App {
         if (!this.meta.gapTypesSolved.includes(p.gapType)) this.meta.gapTypesSolved.push(p.gapType);
         if (this.meta.gapTypesSolved.length >= 4) this.unlock('gapAllTypes');
         saveMeta(this.meta);
+        this.grantSapCard();
       } else {
         this.pushFeed('🧾 ズレはテクセルが修正（翌月に自動反映・ペナルティなし）');
         this.texel('だいじょうぶ、修正しておきました。来月もチャンスはあります');
@@ -1341,9 +1427,10 @@ export class App {
   private annual(): void {
     const score = scoreRun(this.s, 0);
     const prevBest = this.meta.bestRank;
-    // メタ更新（のれんPを獲得して永続化）
-    this.meta.noren += score.norenEarned;
-    this.meta.totalNoren += score.norenEarned;
+    // メタ更新（のれんPを獲得して永続化。財閥級は×2）
+    const gained = Math.round(score.norenEarned * difficultyDef(this.meta.difficulty).norenMult);
+    this.meta.noren += gained;
+    this.meta.totalNoren += gained;
     this.meta.runs++;
     this.meta.bestRank = betterRank(this.meta.bestRank, score.rank);
     if (this.s.disposedTotal === 0 && score.rank !== 'FAIL') this.meta.noDisposalStreak++;
@@ -1386,9 +1473,12 @@ export class App {
         <div class="scoreRow">スコア <b>${fmt(score.score)}G</b>（連結利益 ${fmt(score.consolidatedProfitTotal)}G）</div>
         ${score.rank === 'FAIL' && score.failReason ? `<div class="scoreRow minus">${score.failReason}</div>` : ''}
         ${bonusRows}
-        <div class="scoreRow">のれんP <b>+${score.norenEarned}P</b>（所持 ${this.meta.noren}P）</div>
+        <div class="scoreRow">のれんP <b>+${Math.round(score.norenEarned * difficultyDef(this.meta.difficulty).norenMult)}P</b>${difficultyDef(this.meta.difficulty).norenMult > 1 ? ' <small>（財閥級×2）</small>' : ''}（所持 ${this.meta.noren}P）</div>
         <div class="btnRow">
           <button id="achBtn">🏆 じっせき</button>
+          <button id="zukanBtn">📚 ずかん</button>
+        </div>
+        <div class="btnRow">
           <button id="againBtn">🐑 もう一度</button>
           <button id="labBtn" class="primary">🔬 ラボで強化</button>
         </div>
@@ -1417,6 +1507,7 @@ export class App {
       this.texel(RANK_COMMENTS[score.rank] ?? '');
     }
     this.panel.querySelector('#achBtn')!.addEventListener('click', () => { unlockAudio(); SE.decide(); this.achievementsPhase(() => this.revealAnnual(score, prevBest)); });
+    this.panel.querySelector('#zukanBtn')!.addEventListener('click', () => { unlockAudio(); SE.decide(); this.zukanPhase(() => this.revealAnnual(score, prevBest)); });
     this.panel.querySelector('#againBtn')!.addEventListener('click', () => { unlockAudio(); SE.buy(); this.restartRun(); });
     this.panel.querySelector('#labBtn')!.addEventListener('click', () => { unlockAudio(); SE.decide(); this.labPhase(); });
   }
@@ -1483,6 +1574,36 @@ export class App {
     this.panel.querySelector('#achBack')!.addEventListener('click', () => { unlockAudio(); SE.decide(); back(); });
   }
 
+  // ── 📚ずかん ──
+  private zukanPhase(back: () => void): void {
+    const seen = new Set(this.meta.goodsSeen);
+    const goodsRows = GOODS_CARDS.map(c => {
+      if (!seen.has(c.id)) {
+        return `<div class="zukanCard locked"><div class="zukanImg">🔒</div><b>？？？</b></div>`;
+      }
+      const value = c.cost != null && c.price != null
+        ? `<small class="zukanVal">原価${fmt(c.cost)}G → 売値<b>${fmt(c.price)}G</b></small>`
+        : c.cost != null ? `<small class="zukanVal">原価${fmt(c.cost)}G</small>` : '';
+      return `<div class="zukanCard">
+        <div class="zukanImg"><img src="${spriteUrl(c.sprite)}" alt="${c.name}"></div>
+        <b>${c.name}</b>${value}<small>${c.flavor}</small>
+      </div>`;
+    }).join('');
+    const sapRows = SAP_CARDS.map((c, i) => i < this.meta.sapCards
+      ? `<div class="sapCard"><b>${c.code}</b> ${c.name}<br><small>${c.text}</small></div>`
+      : `<div class="sapCard locked">🔒 ？？？<br><small>ズレ探しに正解すると1枚ずつ</small></div>`).join('');
+    this.panel.innerHTML = `
+      <div class="tkwin ach">
+        <div class="secTitle">📗 商品ずかん <small>${this.meta.goodsSeen.length}/${GOODS_CARDS.length}・作ると増えます</small></div>
+        <div class="zukanGrid">${goodsRows}</div>
+        <div class="secTitle">📘 SAPずかん <small>${this.meta.sapCards}/${SAP_CARDS.length}・ズレ探しの報酬</small></div>
+        <div class="sapList">${sapRows}</div>
+        <div class="btnRow"><button id="zukanBack" class="primary">← もどる</button></div>
+      </div>`;
+    this.texel('付加価値の階段、見えますか？羊毛50Gがコートになると…');
+    this.panel.querySelector('#zukanBack')!.addEventListener('click', () => { unlockAudio(); SE.decide(); back(); });
+  }
+
   private diaryPhase(i: number, back: () => void): void {
     const d = DIARY[i];
     this.panel.innerHTML = `
@@ -1523,12 +1644,17 @@ export class App {
         ${rows}
         <div class="btnRow">
           <button id="labAch">🏆 じっせき</button>
-          <button id="startRun" class="primary">🐑 このつよさで開業 ▶</button>
+          <button id="labZukan">📚 ずかん</button>
+          <button id="startRun" class="primary">🐑 開業 ▶</button>
         </div>
       </div>`;
     this.panel.querySelector('#labAch')?.addEventListener('click', () => {
       unlockAudio(); SE.decide();
       this.achievementsPhase(() => this.labPhase());
+    });
+    this.panel.querySelector('#labZukan')?.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.zukanPhase(() => this.labPhase());
     });
     this.texel('のれん（信用）が力になります。どこを伸ばしましょう？');
     this.panel.querySelectorAll<HTMLButtonElement>('.labBuy').forEach(btn => {
@@ -1549,8 +1675,6 @@ export class App {
   }
 
   private restartRun(): void {
-    this.s = this.newRun();
-    this.view.setState(this.s);
     this.beginPeriod();
   }
 }

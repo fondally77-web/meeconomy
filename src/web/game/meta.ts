@@ -38,6 +38,23 @@ export interface MetaState {
   noDisposalStreak: number;      // 廃棄ゼロ連続ラン数
   puzzleNoMiss: number;          // ノーミス正解の累計回数
   gapTypesSolved: string[];      // 正解したズレ型
+  difficulty: Difficulty;        // 選択中の難易度
+  goodsSeen: string[];           // 商品図鑑：手にした品目
+  sapCards: number;              // SAP図鑑：獲得枚数（順番に開く）
+}
+
+export type Difficulty = 'easy' | 'normal' | 'hard';
+export interface DifficultyDef {
+  id: Difficulty; icon: string; name: string; desc: string;
+  cashBonus: number; truckBonus: number; norenMult: number;
+}
+export const DIFFICULTIES: DifficultyDef[] = [
+  { id: 'easy',   icon: '🐑', name: 'ひつじ級',   desc: '資金+10,000G・🚚+1台。のんびり経営', cashBonus: 10_000, truckBonus: 1, norenMult: 1 },
+  { id: 'normal', icon: '🧑‍🌾', name: 'ひつじかい級', desc: '標準ルール（バランス調整の基準）',   cashBonus: 0, truckBonus: 0, norenMult: 1 },
+  { id: 'hard',   icon: '🏯', name: '財閥級',     desc: '資金▲12,000G。かわりにのれん×2',     cashBonus: -12_000, truckBonus: 0, norenMult: 2 },
+];
+export function difficultyDef(id: Difficulty): DifficultyDef {
+  return DIFFICULTIES.find(d => d.id === id) ?? DIFFICULTIES[1];
 }
 
 const KEY = 'meeconomy-meta-v1';
@@ -46,6 +63,7 @@ export function emptyMeta(): MetaState {
   return {
     noren: 0, totalNoren: 0, runs: 0, bestRank: '-', upgrades: {},
     achievements: [], noDisposalStreak: 0, puzzleNoMiss: 0, gapTypesSolved: [],
+    difficulty: 'normal', goodsSeen: ['sheep', 'lamb'], sapCards: 0,
   };
 }
 
