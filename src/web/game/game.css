@@ -147,7 +147,13 @@ table.pl tr.star td { color: var(--gold); font-size: 16px; }
 
 /* タイトル・ストーリー */
 .titleWin { text-align: center; }
-.titleLogo { font-size: 30px; color: var(--gold); margin: 14px 0 4px; text-shadow: 2px 2px 0 #000; }
+.titleSheep { image-rendering: pixelated; height: 56px; margin-top: 10px; animation: sheepBob 2s ease-in-out infinite; }
+@keyframes sheepBob { 50% { transform: translateY(-4px); } }
+.titleLogo {
+  font-size: 32px; color: var(--gold); margin: 2px 0 4px;
+  text-shadow: 2px 2px 0 #000, -2px 2px 0 #000, 2px -2px 0 #000, -2px -2px 0 #000, 4px 4px 0 rgba(0, 0, 0, .45);
+  letter-spacing: 2px;
+}
 .titleCoin { display: inline-block; animation: coinSpin 2.4s ease-in-out infinite; }
 @keyframes coinSpin { 50% { transform: rotateY(180deg); } }
 .titleSub { font-size: 14px; opacity: .85; margin-bottom: 12px; }

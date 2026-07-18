@@ -32,7 +32,7 @@ import {
 } from './meta.js';
 import { ACHIEVEMENTS, DIARY, achievementById } from './achievements.js';
 import { GOODS_CARDS, SAP_CARDS } from './zukan.js';
-import { drawSprite, type Sprite } from './sprites.js';
+import { drawSprite, SHEEP_A as SHEEP_A_TITLE, type Sprite } from './sprites.js';
 import { startBgmIfWanted, toggleBgm } from './bgm.js';
 
 /** ドット絵スプライトをimg用データURLに（図鑑カード用） */
@@ -203,7 +203,8 @@ export class App {
     const save = this.hasSave();
     this.panel.innerHTML = `
       <div class="tkwin titleWin">
-        <div class="titleLogo">🐑 メェコノミー <span class="titleCoin">🪙</span></div>
+        <img class="titleSheep" src="${spriteUrl(SHEEP_A_TITLE, 5)}" alt="羊">
+        <div class="titleLogo">メェコノミー <span class="titleCoin">🪙</span></div>
         <div class="titleSub">毛を刈って飼い続けるか、狩ってお肉にするか。──れんけつ経営ローグライト</div>
         ${save ? `<div class="note">📖 セーブデータ：${this.meta.runs}期おわり・のれん${this.meta.noren}P・ベスト${this.meta.bestRank}</div>` : ''}
         <div class="note">むずかしさ</div>
