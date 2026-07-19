@@ -236,6 +236,7 @@ export const GOLD_SHEEP_B = reskin(SHEEP_B, { W: 'Y', w: 'y' });
 export const GOLD_LAMB = reskin(LAMB, { W: 'Y', w: 'y' });
 export const GOLD_WOOLBAG = reskin(WOOLBAG, { D: 'Y', d: 'y' });
 export const GOLD_YARNROLL = reskin(YARNROLL, { T: 'Y', t: 'y' });
+export const GOLD_MEATBOX = reskin(MEATBOX, { R: 'Y', r: 'y' });
 
 // 任意の商品スプライトを金色バージョンに（結果はキャッシュ）
 const GOLD_MAP: Record<string, string> = {

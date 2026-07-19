@@ -19,10 +19,10 @@ import type {
 } from '../../game/types.js';
 import { balancedBot } from '../../../sim/bots.js';
 import { PipelineView, CW, CH, type Overlay, type GoodsItem } from './pipeline.js';
-import { YARNROLL, GOLD_YARNROLL, MEATBOX, goodsSprite, goldify } from './sprites.js';
+import { YARNROLL, GOLD_YARNROLL, MEATBOX, GOLD_MEATBOX, goodsSprite, goldify } from './sprites.js';
 import { SE, unlockAudio, isSeOn, setSeOn } from './se.js';
 import {
-  MONTH_LABELS, EVENT_NAMES, RECIPE_NAMES, COMPANY_NAMES, RANK_COMMENTS, GOODS_NAMES,
+  MONTH_LABELS, EVENT_NAMES, RECIPE_NAMES, COMPANY_NAMES, RANK_COMMENTS, GOODS_NAMES, ROUTE_NAMES,
 } from './labels.js';
 import type { EngineOptions, GoodsId, LedgerRow } from '../../game/types.js';
 import { judgePuzzle } from '../../game/puzzle/ledgerGap.js';
@@ -91,7 +91,14 @@ export class App {
   private apparelList: GoodsItem[] = []; // 完成品の内訳（棚の見た目用・金の商品含む）
   private delicaList: GoodsItem[] = [];
   private shelf: GoodsItem[] = [];
-  private goldCarry = { farmWool: 0, woolWool: 0, woolYarn: 0, apparelYarn: 0 };  // 金の毛の月またぎ
+  private goldCarry = {
+    farmWool: 0, woolWool: 0, woolYarn: 0, apparelYarn: 0,
+    meatSheep: 0, meatMeat: 0, delicaMeat: 0,
+  };  // 金の素材の月またぎ
+  private holdGold = false;              // ✨金の素材を温存する
+  private rescueUsed = false;            // メリノ基金（倒産救済・ラン1回）
+  private allocLog: string[] = [];       // 配車の内訳表示
+  private inFarmStage = false;
   private meta: MetaState = loadMeta();  // のれんP・ラボ強化（永続）
   private engineOpts: EngineOptions = {};
   private baseShearCap = SHEAR_CAPACITY;
@@ -165,9 +172,13 @@ export class App {
         }
       },
       canShip: () => true,
-      onShipped: () => {
+      onShipped: (golden) => {
         this.draft.sheepToShip++;
         this.im.shipWait++;
+        if (golden) {
+          this.im.goldShipWait++;
+          this.popText(280, 130, '✨金の羊が乗り場へ…', '#ffd24a');
+        }
         this.sync();
         this.updateFarmCounts();
       },
@@ -185,6 +196,11 @@ export class App {
       root.querySelector('#feedWin')!.classList.toggle('hidden');
       this.unread = 0;
       this.renderHud();
+    });
+    this.hud.meez.addEventListener('click', () => {
+      unlockAudio();
+      if (this.inFarmStage) { SE.decide(); this.stadiumPhase(); }
+      else this.texel('観戦は①ファームのお仕事中に⚾観戦からどうぞ');
     });
     this.s = this.newRun();
     this.view.setState(this.s);
@@ -275,11 +291,14 @@ export class App {
       { scene: 'farm', text: 'ボクはテクセル。経理部に代々住みつく<b>仕訳の精</b>です。<br>先代の口ぐせ、覚えておいてください。<br>「<b>羊は裏切らない。裏切るのは帳簿のほうだ</b>」……メェ' },
       { scene: 'farm', text: '羊は<b>✂️毛を刈って飼い続ければ、なんども稼いでくれます</b>。<br>ただし飼っているあいだは毎月エサ代。<br><b>🔪狩ってお肉にすれば大きなお金が一度きり</b>——その子はもういません' },
       { scene: 'farm', text: 'つまり毎月の悩みはこれだけ。<br>「<b>毛を刈って飼い続けるか、狩ってお肉にするか</b>」<br>どちらも正解で、どちらもちょっと痛い。それが経営です。メェ' },
-      { scene: 'market', text: '⚾<b>メェーズ</b>は<b>うちのグループの球団</b>です。<br>勝てばブランドが上がって商品が売れ、優勝すれば感謝セール。<br>補強するかどうかも、オーナーのあなたの決裁ですよ' },
+      { scene: 'stadium', text: '⚾<b>メェーズ</b>は<b>うちのグループの球団</b>です。<br>勝てばブランドが上がって商品が売れ、優勝すれば感謝セール。<br>補強するかどうかも、オーナーのあなたの決裁ですよ' },
       { scene: 'market', text: 'ゴールは<b>1年（12ヶ月）の決算</b>。れんけつ利益でランクが決まり、<br><b>のれん（信用）</b>が貯まって、次の期はもっと大きく戦えます。<br>目指せ、初代を超える羊財閥！' },
       { scene: 'farm', text: 'それでは第1期、<b>開幕</b>です。<br>まずは✂️を選んで、もこもこの羊をタップ。<br>いってらっしゃい、3代目！' },
     ];
     const p = pages[page];
+    if (p.scene === 'stadium') {
+      this.view.setStadium({ label: this.s.ballpark.headerLabel, power: this.s.ballpark.teamPower, news: '' });
+    }
     this.view.setScene(p.scene);
     this.panel.innerHTML = `
       <div class="tkwin titleWin">
@@ -308,6 +327,9 @@ export class App {
     this.view.setState(this.s);
     this.runStats = { sheared: 0, shipped: 0, slaughtered: 0, coats: 0, stances: new Set(), allOmakase: true };
     this.viaOmakase = false;
+    this.rescueUsed = false;
+    this.holdGold = false;
+    this.goldCarry = { farmWool: 0, woolWool: 0, woolYarn: 0, apparelYarn: 0, meatSheep: 0, meatMeat: 0, delicaMeat: 0 };
     const period = this.meta.runs + 1;
     const goal = this.meta.bestRank !== '-' && this.meta.bestRank !== 'FAIL'
       ? `目標：ベスト「${this.meta.bestRank}」超え！`
@@ -380,6 +402,10 @@ export class App {
     im.goldWoolWool = Math.min(im.goldWoolWool, im.woolWool);
     im.goldWoolYarn = Math.min(im.goldWoolYarn, im.woolYarn);
     im.goldApparelYarn = Math.min(im.goldApparelYarn, im.apparelYarn);
+    im.goldShipWait = Math.min(im.goldShipWait, im.shipWait);
+    im.goldMeatSheep = Math.min(im.goldMeatSheep, im.meatSheep);
+    im.goldMeatMeat = Math.min(im.goldMeatMeat, im.meatMeat);
+    im.goldDelicaMeat = Math.min(im.goldDelicaMeat, im.delicaMeat);
     this.view.setOverlay(im);
     this.view.setCraftLists(this.apparelList, this.delicaList);
   }
@@ -502,15 +528,34 @@ export class App {
     return rollEvent(this.s.month, rng, wasChampion, this.s.gapsTotal).eventId;
   }
 
-  /** トラックを割り当てて運べる量を返す（エンジンと同じ丸め） */
-  private alloc(route: RouteId, want: number): number {
-    if (want <= 0 || this.pool <= 0) return 0;
+  /** トラックを割り当てて運べる量を返す（エンジンと同じ丸め）。内訳はallocLogへ */
+  private alloc(route: RouteId, want: number, cargo = '', unit = '箱'): number {
+    if (want <= 0) return 0;
+    if (this.pool <= 0) {
+      if (cargo) this.allocLog.push(`🚫 ${ROUTE_NAMES[route]}：トラック不足で${cargo}${want}${unit}が待機`);
+      return 0;
+    }
     const n = Math.min(Math.ceil(want / this.loadCap()), this.pool);
     const moved = Math.min(want, n * this.loadCap());
     this.draft.truckAssignment[route] += n;
     this.pool -= n;
     this.view.setTrucksLeft(this.pool);
+    if (cargo) {
+      const left = want - moved;
+      this.allocLog.push(`🚚${n}台 ${ROUTE_NAMES[route]}：${cargo}${moved}${unit}${left > 0 ? `（${left}${unit}積み残し）` : ''}`);
+    }
     return moved;
+  }
+
+  /** 輸送中パネル（何に何台使っているか） */
+  private transportPanel(title: string, extraHtml = ''): void {
+    this.panel.innerHTML = `
+      <div class="tkwin flowNote">${title}
+        <div class="allocList">
+          ${this.allocLog.map(l => `<div>${l}</div>`).join('')}
+          <div class="dim">🚚 のこり${this.pool}台／全${this.s.logi.trucks}台</div>
+        </div>${extraHtml}
+      </div>`;
   }
 
   // ── 月のはじまり ──
@@ -532,11 +577,15 @@ export class App {
       delicaMeat: st('delica', 'lambMeat'), delicaGoods: goodsSum('delica') - st('delica', 'lambMeat'),
       apparelYarn: st('apparel', 'yarn'), apparelGoods: goodsSum('apparel') - st('apparel', 'yarn'),
       salesBoxes: goodsSum('sales'),
-      // 先月の金の毛は在庫が残っていれば金色のまま
+      // 先月の金の素材は在庫が残っていれば金色のまま
       goldFarmWool: Math.min(this.goldCarry.farmWool, st('farm', 'wool')),
       goldWoolWool: Math.min(this.goldCarry.woolWool, st('wool', 'wool')),
       goldWoolYarn: Math.min(this.goldCarry.woolYarn, st('wool', 'yarn')),
       goldApparelYarn: Math.min(this.goldCarry.apparelYarn, st('apparel', 'yarn')),
+      goldShipWait: 0,
+      goldMeatSheep: Math.min(this.goldCarry.meatSheep, st('meat', 'sheep')),
+      goldMeatMeat: Math.min(this.goldCarry.meatMeat, st('meat', 'lambMeat')),
+      goldDelicaMeat: Math.min(this.goldCarry.delicaMeat, st('delica', 'lambMeat')),
     };
     // 完成品の内訳（棚に何の商品が並ぶか）
     const expand = (cid: keyof RunState['companies'], keep: (g: GoodsId) => boolean): GoodsItem[] =>
@@ -563,6 +612,7 @@ export class App {
 
   // ── ①ファーム ──
   private stageFarm(): void {
+    this.inFarmStage = true;
     this.view.setScene('farm');
     this.view.setTool('shear');
     const s = this.s;
@@ -590,6 +640,12 @@ export class App {
         <div class="btnRow">
           <button id="omakase">🤖今月おまかせ</button>
           <button id="nextStage" class="primary">🚚 集荷にすすむ ▶</button>
+        </div>
+        <div class="btnRow subRow">
+          <button id="fAch">🏆じっせき</button>
+          <button id="fZukan">📚ずかん</button>
+          <button id="fStadium">⚾観戦</button>
+          <button id="fHome">🏠</button>
         </div>
       </div>`;
     const m = s.month;
@@ -634,6 +690,22 @@ export class App {
       this.texel('🔪モード。タップした羊は乗り場へ歩いていきます');
     });
     this.panel.querySelector('#buyTruck')!.addEventListener('click', () => this.buyTruck());
+    this.panel.querySelector('#fAch')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.achievementsPhase(() => this.stageFarm());
+    });
+    this.panel.querySelector('#fZukan')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.zukanPhase(() => this.stageFarm());
+    });
+    this.panel.querySelector('#fStadium')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.stadiumPhase();
+    });
+    this.panel.querySelector('#fHome')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.confirmAbandon();
+    });
     this.panel.querySelector('#omakase')!.addEventListener('click', () => {
       unlockAudio(); SE.buy();
       this.runOmakase();
@@ -641,6 +713,50 @@ export class App {
     this.panel.querySelector('#nextStage')!.addEventListener('click', () => {
       unlockAudio(); SE.buy();
       this.stageTransportA();
+    });
+  }
+
+  // ── ⚾スタジアム観戦（ファーム中ならいつでも寄れる） ──
+  private stadiumPhase(): void {
+    const b = this.s.ballpark;
+    this.view.setTool(null);
+    this.view.setStadium({ label: b.headerLabel, power: b.teamPower, news: this.lastNews });
+    this.view.setScene('stadium');
+    this.panel.innerHTML = `
+      <div class="tkwin stageWin">
+        <div class="secTitle">⚾ ジェイ・ラム・スタジアム <small>メェーズ観戦</small></div>
+        <div class="note">いまの成績：<b>${b.headerLabel}</b>　チーム力：<b>${b.teamPower}</b>　ブランド係数：<b>×${b.brandFactor.toFixed(2)}</b></div>
+        ${this.lastNews ? `<div class="note">📰 ${this.lastNews}</div>` : ''}
+        <div class="note dim">メェーズが勝つとグループのブランドが上がって、商品が売れやすくなります。補強はラボの「⚾メェーズ補強」から（のれんP）</div>
+        <div class="btnRow"><button id="stBack" class="primary">← 牧場へもどる</button></div>
+      </div>`;
+    this.texel('がんばれメェーズ！勝てばうちの商品もよく売れるんです。メェ');
+    this.panel.querySelector('#stBack')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.stageFarm();
+    });
+  }
+
+  /** 途中破棄してタイトルへ（のれん・実績・ラボ強化は残る） */
+  private confirmAbandon(): void {
+    this.view.setTool(null);
+    this.panel.innerHTML = `
+      <div class="tkwin titleWin">
+        <div class="note">⚠️ 今の期をやめて、タイトルにもどりますか？<br>この期の進みぐあいは消えます（のれんP・実績・ラボ強化はそのまま）</div>
+        <div class="btnRow">
+          <button id="abBack" class="primary">← つづける</button>
+          <button id="abGo">🏠 やめてタイトルへ</button>
+        </div>
+      </div>`;
+    this.panel.querySelector('#abBack')!.addEventListener('click', () => { SE.decide(); this.stageFarm(); });
+    this.panel.querySelector('#abGo')!.addEventListener('click', () => {
+      SE.deny();
+      if (this.puzzleTimer) { clearInterval(this.puzzleTimer); this.puzzleTimer = null; }
+      this.view.setOverlay(null);
+      this.setTicker('');
+      this.s = this.newRun();
+      this.view.setState(this.s);
+      this.titlePhase();
     });
   }
 
@@ -694,11 +810,13 @@ export class App {
 
   // ── ②集荷（ファーム→ウール/ミート） ──
   private stageTransportA(): void {
+    this.inFarmStage = false;
     this.view.setTool(null);
     this.view.setScene('map');
-    this.panel.innerHTML = `<div class="tkwin flowNote">🚚 集荷中…</div>`;
-    const mvW = this.alloc('farm-wool', this.im.farmWool);
-    const mvS = this.alloc('farm-meat', this.im.shipWait);
+    this.allocLog = [];
+    const mvW = this.alloc('farm-wool', this.im.farmWool, '羊毛', '袋');
+    const mvS = this.alloc('farm-meat', this.im.shipWait, '羊', '頭');
+    this.transportPanel('🚚 集荷中…');
     const leftovers: string[] = [];
     if (mvW < this.im.farmWool) leftovers.push(`羊毛${this.im.farmWool - mvW}袋`);
     if (mvS < this.im.shipWait) leftovers.push(`羊${this.im.shipWait - mvS}頭`);
@@ -719,8 +837,16 @@ export class App {
     }
     if (mvS > 0) {
       waiting++;
-      this.im.shipWait -= mvS; this.sync();
-      this.view.animateTransport('farm-meat', 'sheep', () => { this.im.meatSheep += mvS; this.sync(); done(); });
+      const gm = Math.min(this.im.goldShipWait, mvS);
+      this.im.shipWait -= mvS;
+      this.im.goldShipWait -= gm;
+      this.sync();
+      this.view.animateTransport('farm-meat', 'sheep', () => {
+        this.im.meatSheep += mvS;
+        this.im.goldMeatSheep += gm;
+        this.sync();
+        done();
+      });
     }
     if (waiting === 0) this.enterWork(leftovers);
   }
@@ -792,12 +918,20 @@ export class App {
     const slaughter = () => {
       if (this.im.meatSheep <= 0) { SE.deny(); this.texel('と畜する羊がいません'); return false; }
       if (this.draft.slaughterQty >= meatCap) { SE.deny(); this.texel(`と畜は月${meatCap}頭まで（強化はラボ／P5）`); return false; }
+      const goldSl = this.im.goldMeatSheep > 0; // 金の羊から先にさばく
       this.draft.slaughterQty++;
       this.im.meatSheep--;
       this.im.meatMeat += MEAT_PER_SHEEP;
+      if (goldSl) {
+        this.im.goldMeatSheep--;
+        this.im.goldMeatMeat += MEAT_PER_SHEEP;
+        this.view.craftPop('right', GOLD_MEATBOX);
+        this.popText(236, 66, `✨金のラム肉x${MEAT_PER_SHEEP}！`, '#ffd24a');
+      } else {
+        this.view.craftPop('right', MEATBOX);
+        this.popText(236, 66, `🥩x${MEAT_PER_SHEEP}`, '#ff9c9c');
+      }
       this.comboHit(236, 40);
-      this.view.craftPop('right', MEATBOX);
-      this.popText(236, 66, `🥩x${MEAT_PER_SHEEP}`, '#ff9c9c');
       this.seenGoods('lambMeat');
       return true;
     };
@@ -838,10 +972,11 @@ export class App {
   private stageTransportB(): void {
     this.view.setScene('map');
     this.meatAtSplit = this.im.meatMeat;
-    this.panel.innerHTML = `<div class="tkwin flowNote">🚚 配達中…</div>`;
-    const mvY = this.alloc('wool-apparel', this.im.woolYarn);
+    this.allocLog = [];
+    const mvY = this.alloc('wool-apparel', this.im.woolYarn, '糸', '巻');
     const wantM = Math.max(0, this.im.meatMeat - this.directMeat);
-    const mvM = this.alloc('meat-delica', wantM);
+    const mvM = this.alloc('meat-delica', wantM, 'ラム肉', '箱');
+    this.transportPanel('🚚 配達中…');
     const leftovers: string[] = [];
     if (mvY < this.im.woolYarn) leftovers.push(`糸${this.im.woolYarn - mvY}巻`);
     if (mvM < wantM) leftovers.push(`ラム肉${wantM - mvM}箱`);
@@ -862,8 +997,16 @@ export class App {
     }
     if (mvM > 0) {
       waiting++;
-      this.im.meatMeat -= mvM; this.sync();
-      this.view.animateTransport('meat-delica', 'lambMeat', () => { this.im.delicaMeat += mvM; this.sync(); done(); });
+      const gm = Math.min(this.im.goldMeatMeat, mvM);
+      this.im.meatMeat -= mvM;
+      this.im.goldMeatMeat -= gm;
+      this.sync();
+      this.view.animateTransport('meat-delica', 'lambMeat', () => {
+        this.im.delicaMeat += mvM;
+        this.im.goldDelicaMeat += gm;
+        this.sync();
+        done();
+      });
     }
     if (waiting === 0) this.enterCraft(leftovers);
   }
@@ -892,16 +1035,26 @@ export class App {
         ${RECIPE_NAMES[rid]}<br><small>${def.inputGoods === 'yarn' ? '糸' : '肉'}${def.inputQty}＋加工費${fmt(def.fee)}G→${fmt(def.marketPrice)}G</small>
       </button>`;
     };
+    const anyGold = this.im.goldApparelYarn > 0 || this.im.goldDelicaMeat > 0;
     this.panel.innerHTML = `
       <div class="tkwin stageWin">
-        <div class="secTitle">③ 加工のお仕事 <small>👕アパレル・🍖デリカ</small></div>
-        <div class="note">👕 糸${this.im.apparelYarn}巻・のこり能力${aCap - aMade}着</div>
+        <div class="secTitle">③ 加工のお仕事 <small>👕アパレル・🍖デリカ</small>
+          ${anyGold ? `<button class="mini wide ${this.holdGold ? 'on' : ''}" id="holdGoldBtn">✨温存${this.holdGold ? '中' : 'OFF'}</button>` : ''}</div>
+        <div class="note">👕 糸${this.im.apparelYarn}巻${this.im.goldApparelYarn > 0 ? `（うち✨金${this.im.goldApparelYarn}巻）` : ''}・のこり能力${aCap - aMade}着</div>
         <div class="craftRow">${APPAREL_RECIPES.map(r => recipeBtn(r, this.im.apparelYarn, aCap - aMade)).join('')}</div>
-        <div class="note">🍖 ラム肉${this.im.delicaMeat}箱・のこり能力${dCap - dMade}箱</div>
+        <div class="note">🍖 ラム肉${this.im.delicaMeat}箱${this.im.goldDelicaMeat > 0 ? `（うち✨金${this.im.goldDelicaMeat}箱）` : ''}・のこり能力${dCap - dMade}箱</div>
         <div class="craftRow">${MEAT_RECIPES.map(r => recipeBtn(r, this.im.delicaMeat, dCap - dMade)).join('')}</div>
         ${this.truckOfferHtml(leftovers)}
         <div class="btnRow"><button id="nextStage" class="primary">🚚 店にならべる ▶</button></div>
       </div>`;
+    this.panel.querySelector('#holdGoldBtn')?.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.holdGold = !this.holdGold;
+      this.stageCraft(leftovers);
+      this.texel(this.holdGold
+        ? '✨金の素材は使わずとっておきます。来月ぶんと合わせて金の逸品を！'
+        : '✨金の素材も使って加工します（金の商品になります）');
+    });
     this.bindTruckOffer(() => this.stageCraft(leftovers));
     if (leftovers.length > 0) {
       this.texel(`🚚が足りず ${leftovers.join('・')} は届きませんでした。増車すれば次の便から積めます`);
@@ -920,8 +1073,13 @@ export class App {
         const isApparel = def.inputGoods === 'yarn';
         if (isApparel) {
           if (this.im.apparelYarn < def.inputQty) return;
-          // 金の糸を優先して使い、1巻でも使えば金の商品に
-          const goldUse = Math.min(this.im.goldApparelYarn, def.inputQty);
+          // 金の糸を優先して使い、1巻でも使えば金の商品に（✨温存中はふつうの糸だけ）
+          if (this.holdGold && this.im.apparelYarn - this.im.goldApparelYarn < def.inputQty) {
+            SE.deny();
+            this.texel('✨温存中です。ふつうの糸が足りません（温存を切れば作れます）');
+            return;
+          }
+          const goldUse = this.holdGold ? 0 : Math.min(this.im.goldApparelYarn, def.inputQty);
           this.im.goldApparelYarn -= goldUse;
           this.im.apparelYarn -= def.inputQty;
           this.im.apparelGoods++;
@@ -935,14 +1093,22 @@ export class App {
           this.seenGoods(rid);
         } else {
           if (this.im.delicaMeat < def.inputQty) return;
+          if (this.holdGold && this.im.delicaMeat - this.im.goldDelicaMeat < def.inputQty) {
+            SE.deny();
+            this.texel('✨温存中です。ふつうのラム肉が足りません（温存を切れば作れます）');
+            return;
+          }
+          const goldUse = this.holdGold ? 0 : Math.min(this.im.goldDelicaMeat, def.inputQty);
+          this.im.goldDelicaMeat -= goldUse;
           this.im.delicaMeat -= def.inputQty;
           this.im.delicaGoods++;
-          this.delicaList.push({ g: rid, gold: false });
+          const gold = goldUse > 0;
+          this.delicaList.push({ g: rid, gold });
           this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] =
             (this.draft.meatRecipes[rid as keyof typeof this.draft.meatRecipes] ?? 0) + 1;
-          this.view.craftPop('right', goodsSprite(rid));
+          this.view.craftPop('right', gold ? goldify(goodsSprite(rid)) : goodsSprite(rid));
           this.comboHit(236, 40);
-          this.popText(236, 66, `🍖${RECIPE_NAMES[rid]}！`, '#ffc98a');
+          this.popText(236, 66, gold ? `✨金の${RECIPE_NAMES[rid]}！` : `🍖${RECIPE_NAMES[rid]}！`, gold ? '#ffd24a' : '#ffc98a');
           this.seenGoods(rid);
         }
         this.sync();
@@ -958,10 +1124,11 @@ export class App {
   // ── ⑥出荷（→セールス） ──
   private stageTransportC(): void {
     this.view.setScene('map');
-    this.panel.innerHTML = `<div class="tkwin flowNote">🚚 店へ出荷中…</div>`;
-    const mvA = this.alloc('apparel-sales', this.im.apparelGoods);
-    const mvD = this.alloc('delica-sales', this.im.delicaGoods);
-    const mvM = this.alloc('meat-sales', Math.min(this.directMeat, this.im.meatMeat));
+    this.allocLog = [];
+    const mvA = this.alloc('apparel-sales', this.im.apparelGoods, '服', '着');
+    const mvD = this.alloc('delica-sales', this.im.delicaGoods, '加工品', '箱');
+    const mvM = this.alloc('meat-sales', Math.min(this.directMeat, this.im.meatMeat), '直販肉', '箱');
+    this.transportPanel('🚚 店へ出荷中…');
     const leftovers: string[] = [];
     if (mvA < this.im.apparelGoods) leftovers.push(`服${this.im.apparelGoods - mvA}着`);
     if (mvD < this.im.delicaGoods) leftovers.push(`加工品${this.im.delicaGoods - mvD}箱`);
@@ -980,10 +1147,11 @@ export class App {
         done();
       });
     };
+    const goldDirect = Math.min(this.im.goldMeatMeat, mvM);
     move('apparel-sales', 'muffler', mvA, () => { this.im.apparelGoods -= mvA; }, this.apparelList.splice(0, mvA));
     move('delica-sales', 'genghis', mvD, () => { this.im.delicaGoods -= mvD; }, this.delicaList.splice(0, mvD));
-    move('meat-sales', 'lambMeat', mvM, () => { this.im.meatMeat -= mvM; },
-      Array.from({ length: mvM }, () => ({ g: 'lambMeat' as GoodsId, gold: false })));
+    move('meat-sales', 'lambMeat', mvM, () => { this.im.meatMeat -= mvM; this.im.goldMeatMeat -= goldDirect; },
+      Array.from({ length: mvM }, (_, i) => ({ g: 'lambMeat' as GoodsId, gold: i < goldDirect })));
     if (waiting === 0) this.stageMarket(leftovers);
   }
 
@@ -1033,10 +1201,12 @@ export class App {
     rs.stances.add(this.draft.priceStance);
     if (!this.viaOmakase) rs.allOmakase = false;
     this.viaOmakase = false;
-    // 使い残した金の毛は来月へ持ち越し（在庫が残っていれば）
+    // 使い残した金の素材は来月へ持ち越し（在庫が残っていれば）
     this.goldCarry = {
       farmWool: this.im.goldFarmWool, woolWool: this.im.goldWoolWool,
       woolYarn: this.im.goldWoolYarn, apparelYarn: this.im.goldApparelYarn,
+      meatSheep: this.im.goldMeatSheep + this.im.goldShipWait,
+      meatMeat: this.im.goldMeatMeat, delicaMeat: this.im.goldDelicaMeat,
     };
     this.panel.innerHTML = `<div class="tkwin flowNote">🏪 えいぎょう中…（タップでスキップ）</div>`;
     const { next, result } = simulateMonth(this.s, this.draft, this.engineOpts);
@@ -1095,9 +1265,11 @@ export class App {
       await this.wait(260);
     }
     for (let i = 0; i < o.sheepToShip; i++) {
-      if (!this.view.autoShipOne()) break;
+      const res = this.view.autoShipOne();
+      if (!res) break;
       d.sheepToShip++;
       im.shipWait++;
+      if (res.golden) im.goldShipWait++;
       this.sync();
       await this.wait(220);
     }
@@ -1106,14 +1278,18 @@ export class App {
     // ②集荷
     this.view.setScene('map');
     this.texel('🤖「集荷トラック、しゅっぱーつ」');
-    const mvW = this.alloc('farm-wool', im.farmWool);
-    const mvS = this.alloc('farm-meat', im.shipWait);
+    this.allocLog = [];
+    const mvW = this.alloc('farm-wool', im.farmWool, '羊毛', '袋');
+    const mvS = this.alloc('farm-meat', im.shipWait, '羊', '頭');
     const gmW = Math.min(im.goldFarmWool, mvW);
+    const gmS = Math.min(im.goldShipWait, mvS);
     await Promise.all([
       this.autoTransport('farm-wool', 'wool', mvW,
         () => { im.farmWool -= mvW; im.goldFarmWool -= gmW; },
         () => { im.woolWool += mvW; im.goldWoolWool += gmW; }),
-      this.autoTransport('farm-meat', 'sheep', mvS, () => { im.shipWait -= mvS; }, () => { im.meatSheep += mvS; }),
+      this.autoTransport('farm-meat', 'sheep', mvS,
+        () => { im.shipWait -= mvS; im.goldShipWait -= gmS; },
+        () => { im.meatSheep += mvS; im.goldMeatSheep += gmS; }),
     ]);
 
     // ③しこみ
@@ -1131,9 +1307,11 @@ export class App {
       }
       const slN = Math.min(o.slaughterQty, this.s.companies.meat.capacity, im.meatSheep);
       for (let i = 0; i < slN; i++) {
+        const goldSl = im.goldMeatSheep > 0;
         d.slaughterQty++; im.meatSheep--; im.meatMeat += MEAT_PER_SHEEP;
+        if (goldSl) { im.goldMeatSheep--; im.goldMeatMeat += MEAT_PER_SHEEP; }
         this.seenGoods('lambMeat');
-        SE.pop(); this.view.craftPop('right', MEATBOX); this.sync();
+        SE.pop(); this.view.craftPop('right', goldSl ? GOLD_MEATBOX : MEATBOX); this.sync();
         await this.wait(200);
       }
     }
@@ -1142,15 +1320,19 @@ export class App {
 
     // ④配達
     this.view.setScene('map');
-    const mvY = this.alloc('wool-apparel', im.woolYarn);
+    this.allocLog = [];
+    const mvY = this.alloc('wool-apparel', im.woolYarn, '糸', '巻');
     const wantM = Math.max(0, im.meatMeat - this.directMeat);
-    const mvM = this.alloc('meat-delica', wantM);
+    const mvM = this.alloc('meat-delica', wantM, 'ラム肉', '箱');
     const gmY = Math.min(im.goldWoolYarn, mvY);
+    const gmM = Math.min(im.goldMeatMeat, mvM);
     await Promise.all([
       this.autoTransport('wool-apparel', 'yarn', mvY,
         () => { im.woolYarn -= mvY; im.goldWoolYarn -= gmY; },
         () => { im.apparelYarn += mvY; im.goldApparelYarn += gmY; }),
-      this.autoTransport('meat-delica', 'lambMeat', mvM, () => { im.meatMeat -= mvM; }, () => { im.delicaMeat += mvM; }),
+      this.autoTransport('meat-delica', 'lambMeat', mvM,
+        () => { im.meatMeat -= mvM; im.goldMeatMeat -= gmM; },
+        () => { im.delicaMeat += mvM; im.goldDelicaMeat += gmM; }),
     ]);
 
     // ⑤加工
@@ -1163,7 +1345,7 @@ export class App {
       for (const [rid, n] of Object.entries(o.apparelRecipes) as [RecipeId, number][]) {
         const def = RECIPES[rid];
         for (let i = 0; i < (n ?? 0) && aMade < aCap && im.apparelYarn >= def.inputQty; i++) {
-          const goldUse = Math.min(im.goldApparelYarn, def.inputQty);
+          const goldUse = this.holdGold ? 0 : Math.min(im.goldApparelYarn, def.inputQty);
           im.goldApparelYarn -= goldUse;
           im.apparelYarn -= def.inputQty; im.apparelGoods++; aMade++;
           const gold = goldUse > 0;
@@ -1178,12 +1360,15 @@ export class App {
       for (const [rid, n] of Object.entries(o.meatRecipes) as [RecipeId, number][]) {
         const def = RECIPES[rid];
         for (let i = 0; i < (n ?? 0) && dMade < dCap && im.delicaMeat >= def.inputQty; i++) {
+          const goldUse = this.holdGold ? 0 : Math.min(im.goldDelicaMeat, def.inputQty);
+          im.goldDelicaMeat -= goldUse;
           im.delicaMeat -= def.inputQty; im.delicaGoods++; dMade++;
-          this.delicaList.push({ g: rid, gold: false });
+          const gold = goldUse > 0;
+          this.delicaList.push({ g: rid, gold });
           this.seenGoods(rid);
           d.meatRecipes[rid as keyof typeof d.meatRecipes] =
             (d.meatRecipes[rid as keyof typeof d.meatRecipes] ?? 0) + 1;
-          SE.pop(); this.view.craftPop('right', goodsSprite(rid)); this.sync();
+          SE.pop(); this.view.craftPop('right', gold ? goldify(goodsSprite(rid)) : goodsSprite(rid)); this.sync();
           await this.wait(220);
         }
       }
@@ -1191,20 +1376,23 @@ export class App {
 
     // ⑥出荷
     this.view.setScene('map');
-    const mvA = this.alloc('apparel-sales', im.apparelGoods);
-    const mvD = this.alloc('delica-sales', im.delicaGoods);
-    const mvDM = this.alloc('meat-sales', Math.min(this.directMeat, im.meatMeat));
+    this.allocLog = [];
+    const mvA = this.alloc('apparel-sales', im.apparelGoods, '服', '着');
+    const mvD = this.alloc('delica-sales', im.delicaGoods, '加工品', '箱');
+    const mvDM = this.alloc('meat-sales', Math.min(this.directMeat, im.meatMeat), '直販肉', '箱');
     const takeA = this.apparelList.splice(0, mvA);
     const takeD = this.delicaList.splice(0, mvD);
+    const gmDM = Math.min(im.goldMeatMeat, mvDM);
     await Promise.all([
       this.autoTransport('apparel-sales', 'muffler', mvA, () => { im.apparelGoods -= mvA; },
         () => { im.salesBoxes += mvA; this.shelf.push(...takeA); this.view.setShelf(this.shelf); }),
       this.autoTransport('delica-sales', 'genghis', mvD, () => { im.delicaGoods -= mvD; },
         () => { im.salesBoxes += mvD; this.shelf.push(...takeD); this.view.setShelf(this.shelf); }),
-      this.autoTransport('meat-sales', 'lambMeat', mvDM, () => { im.meatMeat -= mvDM; },
+      this.autoTransport('meat-sales', 'lambMeat', mvDM,
+        () => { im.meatMeat -= mvDM; im.goldMeatMeat -= gmDM; },
         () => {
           im.salesBoxes += mvDM;
-          this.shelf.push(...Array.from({ length: mvDM }, () => ({ g: 'lambMeat' as GoodsId, gold: false })));
+          this.shelf.push(...Array.from({ length: mvDM }, (_, i) => ({ g: 'lambMeat' as GoodsId, gold: i < gmDM })));
           this.view.setShelf(this.shelf);
         }),
     ]);
@@ -1219,6 +1407,15 @@ export class App {
 
   // ── 月末リザルト ──
   private monthResult(next: RunState, r: MonthlyResult): void {
+    // メリノ基金：はじめての資金ショートは1回だけ救済（財閥級は対象外）
+    if (next.bankrupt && !this.rescueUsed && this.meta.difficulty !== 'hard') {
+      this.rescueUsed = true;
+      next.bankrupt = false;
+      next.cash += 8_000;
+      this.pushFeed('🏦 メリノ基金が緊急支援 +8,000G（ラン中1回だけ）');
+      this.toastQueue.push('🏦 <b>メリノ基金</b>が救済 +8,000G！');
+      this.runToasts();
+    }
     this.s = next;
     this.view.setScene('map');
     this.view.setOverlay(null);
@@ -1372,6 +1569,21 @@ export class App {
       .reduce((t, cid) => t + s.companies[cid].stock.reduce((u, l) => u + l.groupCost * l.qty, 0), 0);
     const livestock = totalSheep(s.flock) * SHEEP_BOOK_VALUE;
     const assets = s.cash + inventory + livestock;
+    // 内部売買の明細（★の中身）：TRANSFER仕訳の売り手側売上を 売り手→買い手×商品 で集計
+    const tfAgg = new Map<string, number>();
+    for (const e of s.journal) {
+      if (e.month !== r.month || e.sourceDoc.type !== 'TRANSFER') continue;
+      for (const l of e.lines) {
+        if (l.account === 'sales' && l.side === 'credit' && l.counterpartyId) {
+          const key = `${l.companyId}|${l.counterpartyId}|${l.goodsId ?? ''}`;
+          tfAgg.set(key, (tfAgg.get(key) ?? 0) + l.amount);
+        }
+      }
+    }
+    const transferRows = [...tfAgg.entries()].map(([key, amt]) => {
+      const [from, to, goods] = key.split('|');
+      return `<div class="tfRow">${COMPANY_NAMES[from as keyof typeof COMPANY_NAMES] ?? from} → ${COMPANY_NAMES[to as keyof typeof COMPANY_NAMES] ?? to}：${goods ? this.goodsName(goods as GoodsId) : ''} <b>${fmt(amt)}G</b></div>`;
+    }).join('');
     this.panel.innerHTML = `
       <div class="tkwin result">
         <div class="secTitle">📋 ${MONTH_LABELS[r.month]}のけっさん（P/L）</div>
@@ -1382,8 +1594,9 @@ export class App {
           <tr class="star"><td>グループれんけつ <button class="mini" id="whyBtn">★</button></td><td></td><td></td>
             <td class="num ${r.consolidatedProfit >= 0 ? 'plus' : 'minus'}"><b>${fmt(r.consolidatedProfit)}</b></td></tr>
         </table>
-        <div id="whyBox" class="hidden">内部どうしの売買 <b>${fmt(r.eliminations)}G</b> は、グループの外から見ると
-          「右のポケットから左のポケット」。れんけつでは消えます</div>
+        <div id="whyBox" class="hidden">内部どうしの売買は、グループの外から見ると
+          「右のポケットから左のポケット」。れんけつでは利益のかさ上げ分 <b>${fmt(r.eliminations)}G</b> が消えます
+          ${transferRows ? `<div class="tfList"><div class="note dim">今月の内部売買（<b>振替価格</b>＝社内の約束価格で記帳。現金は動きません）</div>${transferRows}</div>` : ''}</div>
         <div id="bsBox" class="hidden">
           <div class="secTitle">🏦 いまの財産（B/S・グループ）</div>
           <table class="pl">
@@ -1596,8 +1809,10 @@ export class App {
     this.panel.innerHTML = `
       <div class="tkwin ach">
         <div class="secTitle">📗 商品ずかん <small>${this.meta.goodsSeen.length}/${GOODS_CARDS.length}・作ると増えます</small></div>
+        <div class="note dim">一度でも作った・仕入れた商品が記録されます。原価と売値をくらべると「加工するほど儲かる」が見えてきます</div>
         <div class="zukanGrid">${goodsRows}</div>
         <div class="secTitle">📘 SAPずかん <small>${this.meta.sapCards}/${SAP_CARDS.length}・ズレ探しの報酬</small></div>
+        <div class="note dim">SAPは世界中の会社が使う業務システム。その用語を、テクセルが羊語で解説するおまけカードです。<br>🧾ズレ探し（帳簿のくいちがい探し）に正解するたび1枚ずつ増えます</div>
         <div class="sapList">${sapRows}</div>
         <div class="btnRow"><button id="zukanBack" class="primary">← もどる</button></div>
       </div>`;
@@ -1641,7 +1856,9 @@ export class App {
     this.panel.innerHTML = `
       <div class="tkwin lab">
         <div class="secTitle">🔬 ラボ <small>のれんP <b id="norenN">${this.meta.noren}</b>P</small></div>
-        <div class="note">強化は<b>次のランから</b>ずっと有効。のれんPは決算のたびに貯まります</div>
+        <div class="note">🔰 <b>ラボとは</b>：年度決算でもらえる<b>のれんP（＝グループの信用）</b>を払って、会社を強化する場所です。<br>
+          強化は<b>次の期からずっと有効</b>（買い直し不要）。倒産しても消えません。<br>
+          「いま→次」の数字がその強化の効きめ。まずは🚚トラックか✂️毛刈り班がおすすめです</div>
         ${rows}
         <div class="btnRow">
           <button id="labAch">🏆 じっせき</button>

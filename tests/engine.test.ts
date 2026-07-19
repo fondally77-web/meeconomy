@@ -221,7 +221,7 @@ describe('スコアリング', () => {
     expect(labels).toContain('全月れんけつ黒字');
     expect(r.consolidatedProfitTotal).toBe(96_000);
     expect(r.rank).toBe('S'); // 96,000+ボーナス > 90,000
-    expect(r.norenEarned).toBe(Math.ceil(r.score / 1000));
+    expect(r.norenEarned).toBe(Math.max(1, Math.ceil(r.score / 4000)));
   });
 
   it('倒産時はFAILと敗因', () => {

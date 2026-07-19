@@ -3,7 +3,7 @@ import type { GoodsId, MonthlyResult, RouteId, RunState } from '../../game/types
 import {
   drawSprite, goodsSprite, goldify, PAL,
   SHEEP_A, SHEEP_B, SHORN_A, SHORN_B, LAMB, TRUCK, COIN, CUSTOMER,
-  GOLD_SHEEP_A, GOLD_SHEEP_B, GOLD_LAMB, GOLD_WOOLBAG, GOLD_YARNROLL,
+  GOLD_SHEEP_A, GOLD_SHEEP_B, GOLD_LAMB, GOLD_WOOLBAG, GOLD_YARNROLL, GOLD_MEATBOX,
   WOOLBAG, YARNROLL, MEATBOX, type Sprite,
 } from './sprites.js';
 
@@ -47,14 +47,19 @@ export interface Overlay {
   delicaMeat: number; delicaGoods: number;
   apparelYarn: number; apparelGoods: number;
   salesBoxes: number;
-  // ✨金の毛の内数（山の一部を金色で描く）
+  // ✨金の素材の内数（山の一部を金色で描く）
   goldFarmWool: number; goldWoolWool: number; goldWoolYarn: number; goldApparelYarn: number;
+  goldShipWait: number; goldMeatSheep: number; goldMeatMeat: number; goldDelicaMeat: number;
 }
 const GOLD_OF: Partial<Record<keyof Overlay, { key: keyof Overlay; sprite: Sprite }>> = {
   farmWool: { key: 'goldFarmWool', sprite: GOLD_WOOLBAG },
   woolWool: { key: 'goldWoolWool', sprite: GOLD_WOOLBAG },
   woolYarn: { key: 'goldWoolYarn', sprite: GOLD_YARNROLL },
   apparelYarn: { key: 'goldApparelYarn', sprite: GOLD_YARNROLL },
+  shipWait: { key: 'goldShipWait', sprite: GOLD_LAMB },
+  meatSheep: { key: 'goldMeatSheep', sprite: GOLD_LAMB },
+  meatMeat: { key: 'goldMeatMeat', sprite: GOLD_MEATBOX },
+  delicaMeat: { key: 'goldDelicaMeat', sprite: GOLD_MEATBOX },
 };
 const PILE_SPOTS: Partial<Record<keyof Overlay, { x: number; y: number; sprite: Sprite }>> = {
   farmWool:     { x: 104, y: 92, sprite: WOOLBAG },
@@ -70,7 +75,7 @@ const PILE_SPOTS: Partial<Record<keyof Overlay, { x: number; y: number; sprite: 
   salesBoxes:   { x: 256, y: 180, sprite: goodsSprite('muffler') },
 };
 
-export type Scene = 'map' | 'farm' | 'work' | 'craft' | 'market';
+export type Scene = 'map' | 'farm' | 'work' | 'craft' | 'market' | 'stadium';
 export type Tool = 'shear' | 'ship' | null;
 
 interface VisualSheep {
@@ -91,7 +96,7 @@ export interface MapHandlers {
   canShear(): boolean;
   onSheared(golden: boolean): void;
   canShip(): boolean;
-  onShipped(): void;
+  onShipped(golden: boolean): void;
   /** 作業場シーンでのタップ（左=紡績・右=と畜） */
   onWorkTap(kind: 'spin' | 'slaughter'): void;
   onTap(id: string): void;
@@ -134,7 +139,11 @@ export class PipelineView {
     requestAnimationFrame(now => this.loop(now));
   }
 
+  private stadiumInfo = { label: '', power: 50, news: '' };
+  private ballT = 0;
+
   setTool(tool: Tool): void { this.tool = tool; }
+  setStadium(info: { label: string; power: number; news: string }): void { this.stadiumInfo = info; }
   setOverlay(o: Overlay | null): void { this.overlay = o ? { ...o } : null; }
   setTrucksLeft(n: number): void { this.trucksLeft = n; }
   setShelf(goods: GoodsItem[]): void { this.shelfGoods = [...goods]; }
@@ -221,8 +230,9 @@ export class PipelineView {
     } else if (this.tool === 'ship') {
       if (s.kind === 'baby') { SE.mee(); this.pop(sx + 16, sy - 10, 'めぇ！（まだ子羊）', '#ffd24a'); return; }
       if (!this.handlers.canShip()) { SE.mee(); return; }
+      const golden = s.golden;
       this.shipFx(s);
-      this.handlers.onShipped();
+      this.handlers.onShipped(golden);
     }
   }
 
@@ -236,12 +246,13 @@ export class PipelineView {
   }
 
   /** おまかせ再生：1頭出荷（毛刈り済みを優先して残す挙動はエンジンと同じくcd優先） */
-  autoShipOne(): boolean {
+  autoShipOne(): { golden: boolean } | null {
     const s = this.sheep.find(sp => !sp.leaving && sp.kind === 'shorn')
       ?? this.sheep.find(sp => !sp.leaving && sp.kind === 'wool');
-    if (!s) return false;
+    if (!s) return null;
+    const golden = s.golden;
     this.shipFx(s);
-    return true;
+    return { golden };
   }
 
   /** 子羊を1頭ふやす／へらす（購入プレビュー） */
@@ -270,7 +281,11 @@ export class PipelineView {
       ...Array<'shorn'>(s.flock.cd1 + s.flock.cd2).fill('shorn'),
       ...Array<'baby'>(s.flock.lambs).fill('baby'),
     ].slice(0, 24);
-    while (this.sheep.length > want.length) this.sheep.pop();
+    // 減らす時は金の羊を最後まで残す（勝手に消えないように）
+    while (this.sheep.length > want.length) {
+      const idx = this.sheep.map(s => s.golden).lastIndexOf(false);
+      this.sheep.splice(idx >= 0 ? idx : this.sheep.length - 1, 1);
+    }
     while (this.sheep.length < want.length) {
       this.sheep.push({
         x: PEN.x + 6 + Math.random() * (PEN.w - 28),
@@ -421,6 +436,7 @@ export class PipelineView {
       case 'work': this.drawWorkshop('🧶ウール社', '#2c4f9e', '#4a7fd9', '🥩ミート社', '#8e3a30', '#c0574b'); break;
       case 'craft': this.drawWorkshop('👕アパレル社', '#a55c8f', '#d98ec1', '🍖デリカ社', '#b06f22', '#e2953a'); break;
       case 'market': this.drawMarket(); break;
+      case 'stadium': this.drawStadium(dt); break;
       default: this.drawMap(dt); break;
     }
     // 飛翔（現在のシーンのものだけ）
@@ -475,7 +491,10 @@ export class PipelineView {
     ctx.fillStyle = '#f4efe3'; ctx.font = '9px DotGothic16, monospace';
     ctx.fillText('出荷', 284, 116);
     if (this.overlay && this.overlay.shipWait > 0) {
-      for (let i = 0; i < Math.min(3, this.overlay.shipWait); i++) drawSprite(ctx, LAMB, 268 + i * 14, 190 - i * 4, 1.5);
+      const gn = Math.min(this.overlay.goldShipWait, 3);
+      for (let i = 0; i < Math.min(3, this.overlay.shipWait); i++) {
+        drawSprite(ctx, i < gn ? GOLD_LAMB : LAMB, 268 + i * 14, 190 - i * 4, 1.5);
+      }
       ctx.fillText(`x${this.overlay.shipWait}`, 296, 214);
     }
     // 毛袋の山（左下・大。金の毛は金色で）
@@ -533,12 +552,14 @@ export class PipelineView {
       ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
       ctx.fillText(`x${n}`, x + show * 10 + 10, y + 16);
     };
-    // 完成品は「実際に作った商品」の見た目で積む（金の商品は金色）
+    // 完成品は「実際に作った商品」の見た目で積む（金の商品は金色＋✨）
     const listPile = (x: number, y: number, list: GoodsItem[], n: number, fallback: Sprite) => {
       if (n <= 0) return;
       const show = Math.min(3, n);
       for (let i = 0; i < show; i++) {
-        drawSprite(ctx, itemSprite(list[n - show + i], fallback), x + i * 10, y - i * 5, 2);
+        const it = list[n - show + i];
+        drawSprite(ctx, itemSprite(it, fallback), x + i * 10, y - i * 5, 2);
+        if (it?.gold) { ctx.font = '10px sans-serif'; ctx.fillText('✨', x + i * 10 + 10, y - i * 5 - 2); }
       }
       ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
       ctx.fillText(`x${n}`, x + show * 10 + 10, y + 16);
@@ -547,12 +568,15 @@ export class PipelineView {
       // ウール社：羊毛→糸（金の毛は金色のまま）
       pile(24, 150, WOOLBAG, o.woolWool, o.goldWoolWool, GOLD_WOOLBAG);
       pile(96, 90, YARNROLL, o.woolYarn, o.goldWoolYarn, GOLD_YARNROLL);
-      // ミート社：羊→ラム肉
+      // ミート社：羊→ラム肉（金の羊・金の肉は金色）
       if (o.meatSheep > 0) {
-        for (let i = 0; i < Math.min(3, o.meatSheep); i++) drawSprite(ctx, LAMB, 184 + i * 14, 146 - i * 5, 2);
+        const gn = Math.min(o.goldMeatSheep, 3);
+        for (let i = 0; i < Math.min(3, o.meatSheep); i++) {
+          drawSprite(ctx, i < gn ? GOLD_LAMB : LAMB, 184 + i * 14, 146 - i * 5, 2);
+        }
         ctx.fillStyle = '#fff'; ctx.fillText(`x${o.meatSheep}`, 226, 166);
       }
-      pile(256, 90, MEATBOX, o.meatMeat);
+      pile(256, 90, MEATBOX, o.meatMeat, o.goldMeatMeat, GOLD_MEATBOX);
       ctx.fillStyle = '#ffd24a'; ctx.font = '9px DotGothic16, monospace';
       ctx.fillText('タップで紡績→', 24, 196);
       ctx.fillText('タップでと畜→', 184, 196);
@@ -561,7 +585,7 @@ export class PipelineView {
       pile(24, 150, YARNROLL, o.apparelYarn, o.goldApparelYarn, GOLD_YARNROLL);
       listPile(96, 90, this.apparelGoodsList, o.apparelGoods, goodsSprite('muffler'));
       // デリカ：肉→加工品
-      pile(184, 150, MEATBOX, o.delicaMeat);
+      pile(184, 150, MEATBOX, o.delicaMeat, o.goldDelicaMeat, GOLD_MEATBOX);
       listPile(256, 90, this.delicaGoodsList, o.delicaGoods, goodsSprite('genghis'));
       ctx.fillStyle = '#ffd24a'; ctx.font = '9px DotGothic16, monospace';
       ctx.fillText('レシピは下から', 24, 196);
@@ -586,7 +610,9 @@ export class PipelineView {
     let placed = 0;
     for (const y of [86, 156]) {
       for (let i = 0; i < 9 && placed < n; i++, placed++) {
-        drawSprite(ctx, itemSprite(this.shelfGoods[placed], goodsSprite('muffler')), 24 + i * 32, y, 2);
+        const it = this.shelfGoods[placed];
+        drawSprite(ctx, itemSprite(it, goodsSprite('muffler')), 24 + i * 32, y, 2);
+        if (it?.gold) { ctx.font = '11px sans-serif'; ctx.fillText('✨', 24 + i * 32 + 10, y - 2); }
       }
     }
     ctx.fillStyle = '#fff'; ctx.font = '10px DotGothic16, monospace';
@@ -596,6 +622,65 @@ export class PipelineView {
       if (this.marketT < c.delay) continue;
       drawSprite(ctx, CUSTOMER, c.x, c.y, 2);
     }
+  }
+
+  // ── ⚾ジェイ・ラム・スタジアム（観戦） ──
+  private drawStadium(dt: number): void {
+    const { ctx } = this;
+    this.ballT = (this.ballT + dt) % 2.2;   // 1球ごとのループ
+    // ナイター空
+    const sky = ctx.createLinearGradient(0, 0, 0, 90);
+    sky.addColorStop(0, '#0d1030'); sky.addColorStop(1, '#2c3a8c');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, CW, 90);
+    // 客席（ドット群衆）
+    ctx.fillStyle = '#1a2260'; ctx.fillRect(0, 40, CW, 50);
+    for (let i = 0; i < 90; i++) {
+      ctx.fillStyle = ['#f4efe3', '#ffd24a', '#9fd0ff', '#f3b0dd'][i % 4];
+      ctx.fillRect((i * 23) % CW, 46 + ((i * 13) % 38), 3, 3);
+    }
+    // 照明灯
+    for (const x of [30, 290]) {
+      ctx.fillStyle = '#6b7280'; ctx.fillRect(x - 2, 4, 4, 40);
+      ctx.fillStyle = '#fff7cc'; ctx.fillRect(x - 12, 0, 24, 10);
+    }
+    // グラウンド
+    ctx.fillStyle = '#4f9e46'; ctx.fillRect(0, 90, CW, CH - 90);
+    ctx.fillStyle = '#b98a52';
+    ctx.beginPath(); ctx.ellipse(CW / 2, 200, 120, 62, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#e8e4d8';
+    ctx.fillRect(CW / 2 - 2, 196, 8, 8);           // ホームベース
+    // マウンドの投手羊と打席の打者羊
+    const pitch = this.ballT;
+    drawSprite(ctx, SHORN_A, CW / 2 - 8, 128, 2);   // 投手（刈られ羊）
+    const swing = pitch > 1.0 && pitch < 1.25;
+    drawSprite(ctx, SHEEP_A, CW / 2 - 46, 176, 2, swing); // 打者（もこもこ）
+    // バット
+    ctx.strokeStyle = '#d4a017'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    if (swing) { ctx.moveTo(CW / 2 - 14, 182); ctx.lineTo(CW / 2 + 6, 172); }
+    else { ctx.moveTo(CW / 2 - 16, 186); ctx.lineTo(CW / 2 - 26, 168); }
+    ctx.stroke();
+    // ボール：投球（0→1秒）→打球（1〜2秒で場外へ）
+    if (pitch < 1.0) {
+      const t = pitch;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(CW / 2 + 2 - t * 26, 148 + t * 40, 3, 0, 7);
+      ctx.fill();
+    } else if (pitch < 2.0) {
+      const t = pitch - 1.0;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(CW / 2 - 24 + t * 150, 184 - Math.sin(t * Math.PI * 0.55) * 130, 3, 0, 7);
+      ctx.fill();
+    }
+    // スコアボード
+    ctx.fillStyle = '#141c50'; ctx.fillRect(58, 6, 204, 32);
+    ctx.strokeStyle = '#f5f2e8'; ctx.lineWidth = 2; ctx.strokeRect(58, 6, 204, 32);
+    ctx.fillStyle = '#ffd24a'; ctx.font = '10px DotGothic16, monospace';
+    ctx.fillText(`⚾ メェーズ ${this.stadiumInfo.label}`, 66, 19);
+    ctx.fillStyle = '#f4efe3';
+    ctx.fillText(`チーム力 ${this.stadiumInfo.power}　ジェイ・ラム・スタジアム`, 66, 32);
   }
 
   // ── マップ俯瞰 ──
