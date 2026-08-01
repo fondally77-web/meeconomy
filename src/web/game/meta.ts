@@ -38,9 +38,19 @@ export interface MetaState {
   noDisposalStreak: number;      // 廃棄ゼロ連続ラン数
   puzzleNoMiss: number;          // ノーミス正解の累計回数
   gapTypesSolved: string[];      // 正解したズレ型
-  difficulty: Difficulty;        // 選択中の難易度
+  difficulty: Difficulty;        // 難易度（セーブごとに固定。変更は「はじめから」）
   goodsSeen: string[];           // 商品図鑑：手にした品目
   sapCards: number;              // SAP図鑑：獲得枚数（順番に開く）
+  fontScale: FontScale;          // 文字サイズ（🔠で切替・端末設定として保存）
+}
+
+export type FontScale = 'm' | 'l' | 'xl';
+export const FONT_SCALES: { id: FontScale; name: string }[] = [
+  { id: 'm', name: 'ふつう' }, { id: 'l', name: '大きい' }, { id: 'xl', name: '最大' },
+];
+/** <html data-fs> に反映（CSSの --fs-* が切り替わる） */
+export function applyFontScale(scale: FontScale): void {
+  document.documentElement.dataset.fs = scale;
 }
 
 export type Difficulty = 'easy' | 'normal' | 'hard';
@@ -63,7 +73,7 @@ export function emptyMeta(): MetaState {
   return {
     noren: 0, totalNoren: 0, runs: 0, bestRank: '-', upgrades: {},
     achievements: [], noDisposalStreak: 0, puzzleNoMiss: 0, gapTypesSolved: [],
-    difficulty: 'normal', goodsSeen: ['sheep', 'lamb'], sapCards: 0,
+    difficulty: 'normal', goodsSeen: ['sheep', 'lamb'], sapCards: 0, fontScale: 'm',
   };
 }
 

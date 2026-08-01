@@ -1,19 +1,24 @@
-/** BGM：WebAudio合成の牧歌チップチューンループ（外部ファイルなし） */
+/** BGM：WebAudio合成のチップチューンループ（外部ファイルなし）
+ *  2曲：'title'＝オープニング（ゆったり牧歌）／'main'＝本編（アップテンポ）
+ */
 import { unlockAudio } from './se.js';
+
+export type Track = 'title' | 'main';
 
 let playing = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 let nextBarTime = 0;
 let barIndex = 0;
 let master: GainNode | null = null;
+let track: Track = 'main';
 
-const BPM = 150;                // アップテンポ
-const BEAT = 60 / BPM;          // 4分音符
-const BAR = BEAT * 4;
+const BPM_OF: Record<Track, number> = { title: 96, main: 150 };
+let BEAT = 60 / BPM_OF.main;    // 4分音符（曲で変わる）
+let BAR = BEAT * 4;
 
 // 音名→周波数
 const N: Record<string, number> = {
-  C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.0, A3: 220.0, B3: 246.94,
+  C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.0, A3: 220.0, Bb3: 233.08, B3: 246.94,
   C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.0, A4: 440.0, B4: 493.88,
   C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.0,
 };
@@ -34,6 +39,17 @@ const MELODY: Note[][] = [
 const BASS: string[][] = [
   ['C3', 'G3', 'C3', 'G3'], ['G3', 'D3', 'G3', 'D3'], ['A3', 'E3', 'A3', 'E3'], ['F3', 'C3', 'F3', 'C3'],
   ['C3', 'G3', 'C3', 'G3'], ['G3', 'D3', 'G3', 'B3'], ['A3', 'E3', 'A3', 'E3'], ['F3', 'C3', 'G3', 'G3'],
+];
+
+/** オープニング曲：ゆったり4小節（F - C - Dm - B♭）。夜明けの牧場のイメージ */
+const TITLE_MELODY: Note[][] = [
+  [[0, 'F4', 1.5], [1.5, 'A4', 0.5], [2, 'C5', 1.5], [3.5, 'A4', 0.5]],
+  [[0, 'G4', 1], [1, 'E4', 1], [2, 'G4', 1.5], [3.5, 'C5', 0.5]],
+  [[0, 'A4', 1.5], [1.5, 'F4', 0.5], [2, 'D5', 1.5], [3.5, 'C5', 0.5]],
+  [[0, 'A4', 1], [1, 'G4', 1], [2, 'F4', 2]],
+];
+const TITLE_BASS: string[][] = [
+  ['F3', 'C3'], ['C3', 'G3'], ['D3', 'A3'], ['Bb3', 'F3'],
 ];
 
 function ensureMaster(ac: AudioContext): GainNode {
@@ -60,6 +76,18 @@ function voice(ac: AudioContext, out: GainNode, freq: number, at: number, dur: n
 }
 
 function scheduleBar(ac: AudioContext, out: GainNode, bar: number, at: number): void {
+  if (track === 'title') {
+    // オープニング：メロディは三角波でやわらかく、ベースは2分音符、打楽器なし
+    const m = bar % 4;
+    for (const [beat, note, len] of TITLE_MELODY[m]) {
+      voice(ac, out, N[note], at + beat * BEAT, len * BEAT * 0.9, 'triangle', 0.85);
+      voice(ac, out, N[note] * 2, at + beat * BEAT, len * BEAT * 0.9, 'sine', 0.3);  // 1オクターブ上を薄く重ねる
+    }
+    TITLE_BASS[m].forEach((note, i) => {
+      voice(ac, out, N[note], at + i * BEAT * 2, BEAT * 1.8, 'sine', 1.1);
+    });
+    return;
+  }
   const m = bar % 8;
   for (const [beat, note, len] of MELODY[m]) {
     voice(ac, out, N[note], at + beat * BEAT, len * BEAT * 0.85, 'square', 0.45);
@@ -77,12 +105,16 @@ let wanted = true;   // ユーザーがOFFにしたら以後の自動再開も�
 
 export function isBgmOn(): boolean { return playing; }
 
-export function startBgmIfWanted(): void {
-  if (wanted) startBgm();
+export function startBgmIfWanted(t: Track = 'main'): void {
+  if (wanted) startBgm(t);
 }
 
-export function startBgm(): void {
-  if (playing) return;
+export function startBgm(t: Track = 'main'): void {
+  if (playing && t === track) return;
+  if (playing) stopBgm();          // 曲を切り替えるときは一度止める
+  track = t;
+  BEAT = 60 / BPM_OF[t];
+  BAR = BEAT * 4;
   const ac = unlockAudio();
   const out = ensureMaster(ac);
   playing = true;
@@ -107,6 +139,6 @@ export function stopBgm(): void {
 
 export function toggleBgm(): boolean {
   if (playing) { stopBgm(); wanted = false; }
-  else { startBgm(); wanted = true; }
+  else { startBgm(track); wanted = true; }
   return playing;
 }

@@ -28,12 +28,19 @@ import type { EngineOptions, GoodsId, LedgerRow } from '../../game/types.js';
 import { judgePuzzle } from '../../game/puzzle/ledgerGap.js';
 import {
   LAB_NODES, loadMeta, saveMeta, levelOf, nextCost, betterRank, emptyMeta,
-  DIFFICULTIES, difficultyDef, type MetaState,
+  DIFFICULTIES, difficultyDef, applyFontScale, FONT_SCALES, type MetaState, type FontScale,
 } from './meta.js';
 import { ACHIEVEMENTS, DIARY, achievementById } from './achievements.js';
 import { GOODS_CARDS, SAP_CARDS } from './zukan.js';
 import { drawSprite, SHEEP_A as SHEEP_A_TITLE, type Sprite } from './sprites.js';
 import { startBgmIfWanted, toggleBgm } from './bgm.js';
+
+/** 月の7工程（いまどこ？のバー用） */
+const STEPS: { icon: string; name: string }[] = [
+  { icon: '🐑', name: 'ファーム' }, { icon: '🚚', name: '集荷' }, { icon: '🧶', name: 'しこみ' },
+  { icon: '🚚', name: '配達' }, { icon: '👕', name: '加工' }, { icon: '🚚', name: '出荷' },
+  { icon: '🏪', name: '開店' },
+];
 
 /** ドット絵スプライトをimg用データURLに（図鑑カード用） */
 const spriteUrlCache = new Map<Sprite, string>();
@@ -99,6 +106,7 @@ export class App {
   private rescueUsed = false;            // メリノ基金（倒産救済・ラン1回）
   private allocLog: string[] = [];       // 配車の内訳表示
   private inFarmStage = false;
+  private bgmTrack: 'title' | 'main' = 'title';   // オープニング曲／本編曲
   private meta: MetaState = loadMeta();  // のれんP・ラボ強化（永続）
   private engineOpts: EngineOptions = {};
   private baseShearCap = SHEAR_CAPACITY;
@@ -126,8 +134,12 @@ export class App {
           <span id="hudMonth"></span>
           <span class="meez" id="hudMeez"></span>
           <button id="hudBell" class="bell">🔔<span id="bellN"></span></button>
+          <span id="hudTools"></span>
         </div>
         <div id="ticker" class="hidden"><span id="tickerText"></span></div>
+        <div id="steps" class="hidden">
+          ${STEPS.map((s, i) => `<span class="stepChip" data-i="${i}">${s.icon}<span class="lb"> ${s.name}</span></span>`).join('')}
+        </div>
         <div id="stage"><canvas id="game" width="${CW}" height="${CH}"
           aria-label="メェコノミーのパイプライン。上段がウールライン、下段が肉ライン"></canvas></div>
         <div class="tkwin" id="texelWin"><div id="texel"></div></div>
@@ -197,6 +209,11 @@ export class App {
       this.unread = 0;
       this.renderHud();
     });
+    // ブラウザの制限でBGMは最初のタップまで鳴らせないので、最初の操作で必ず起こす
+    document.addEventListener('pointerdown', () => {
+      unlockAudio();
+      startBgmIfWanted(this.bgmTrack);
+    }, { once: true });
     this.hud.meez.addEventListener('click', () => {
       unlockAudio();
       if (this.inFarmStage) { SE.decide(); this.stadiumPhase(); }
@@ -213,6 +230,9 @@ export class App {
   }
 
   private titlePhase(): void {
+    this.setStep(-1);
+    this.bgmTrack = 'title';
+    startBgmIfWanted('title');
     this.view.setScene('map');
     this.view.setTool(null);
     this.renderHud();
@@ -223,11 +243,11 @@ export class App {
         <div class="titleLogo">メェコノミー <span class="titleCoin">🪙</span></div>
         <div class="titleSub">毛を刈って飼い続けるか、狩ってお肉にするか。──れんけつ経営ローグライト</div>
         ${save ? `<div class="note">📖 セーブデータ：${this.meta.runs}期おわり・のれん${this.meta.noren}P・ベスト${this.meta.bestRank}</div>` : ''}
-        <div class="note">むずかしさ</div>
+        <div class="note">むずかしさ${save ? '<small>（この牧場で固定）</small>' : ''}</div>
         <div class="stanceRow" id="diffRow">
-          ${DIFFICULTIES.map(d => `<button data-diff="${d.id}" class="${this.meta.difficulty === d.id ? 'on' : ''}">${d.icon} ${d.name}</button>`).join('')}
+          ${DIFFICULTIES.map(d => `<button data-diff="${d.id}" class="${this.meta.difficulty === d.id ? 'on' : ''}" ${save && this.meta.difficulty !== d.id ? 'disabled' : ''}>${d.icon} ${d.name}</button>`).join('')}
         </div>
-        <div class="note dim" id="diffDesc">${difficultyDef(this.meta.difficulty).desc}</div>
+        <div class="note dim" id="diffDesc">${difficultyDef(this.meta.difficulty).desc}${save ? '<br>🔒 むずかしさはセーブごとに決まります（のれんの倍率が変わるため、途中変更はできません）。変えるときは「はじめから」で新しい牧場を' : ''}</div>
         <div class="btnRow">
           ${save ? '<button id="contBtn" class="primary">📖 つづきから</button>' : ''}
           <button id="titleStart" class="${save ? '' : 'primary'}">🌱 はじめから</button>
@@ -235,7 +255,8 @@ export class App {
         ${save ? '<div class="btnRow"><button id="titleAch">🏆 じっせき・日記</button><button id="titleZukan">📚 ずかん</button></div>' : ''}
       </div>`;
     this.texel('ようこそ。仕訳の精、テクセルです。メェ');
-    this.panel.querySelectorAll<HTMLButtonElement>('#diffRow button').forEach(btn => {
+    // むずかしさはセーブがない＝新しい牧場のときだけ選べる（途中変更でのれん倍率が変わるのを防ぐ）
+    this.panel.querySelectorAll<HTMLButtonElement>('#diffRow button:not([disabled])').forEach(btn => {
       btn.addEventListener('click', () => {
         unlockAudio(); SE.decide();
         this.meta.difficulty = btn.dataset.diff as MetaState['difficulty'];
@@ -266,7 +287,8 @@ export class App {
   private confirmReset(): void {
     this.panel.innerHTML = `
       <div class="tkwin titleWin">
-        <div class="note">⚠️ はじめからにすると、セーブ（${this.meta.runs}期・のれん${this.meta.noren}P・ラボ強化）は消えます。いいですか？</div>
+        <div class="note">⚠️ はじめからにすると、セーブ（${this.meta.runs}期・のれん${this.meta.noren}P・ラボ強化）は消えます。いいですか？<br>
+          <small>新しい牧場になるので、むずかしさを選びなおせます</small></div>
         <div class="btnRow">
           <button id="backBtn">← もどる</button>
           <button id="wipeBtn">🗑 消してはじめから</button>
@@ -275,11 +297,14 @@ export class App {
     this.panel.querySelector('#backBtn')!.addEventListener('click', () => { SE.decide(); this.titlePhase(); });
     this.panel.querySelector('#wipeBtn')!.addEventListener('click', () => {
       SE.deny();
+      const keepFont = this.meta.fontScale;
       this.meta = emptyMeta();
+      this.meta.fontScale = keepFont;      // 文字サイズは端末の設定なので残す
       saveMeta(this.meta);
       this.s = this.newRun();
       this.view.setState(this.s);
-      this.intro();
+      this.titlePhase();                   // むずかしさを選びなおしてから開幕
+      this.texel('まっさらな牧場になりました。むずかしさを選んで「はじめから」！');
     });
   }
 
@@ -296,6 +321,7 @@ export class App {
       { scene: 'farm', text: 'それでは第1期、<b>開幕</b>です。<br>まずは✂️を選んで、もこもこの羊をタップ。<br>いってらっしゃい、3代目！' },
     ];
     const p = pages[page];
+    this.setStep(-1);
     if (p.scene === 'stadium') {
       this.view.setStadium({ label: this.s.ballpark.headerLabel, power: this.s.ballpark.teamPower, news: '' });
     }
@@ -322,7 +348,8 @@ export class App {
 
   /** 期の開幕（口上つき）。難易度・ラボ強化を反映してランを作り直す */
   private beginPeriod(): void {
-    startBgmIfWanted();
+    this.bgmTrack = 'main';
+    startBgmIfWanted('main');
     this.s = this.newRun();
     this.view.setState(this.s);
     this.runStats = { sheared: 0, shipped: 0, slaughtered: 0, coats: 0, stances: new Set(), allOmakase: true };
@@ -498,6 +525,18 @@ export class App {
     }, 2400);
   }
 
+  /** いまどの工程？のバー（-1で非表示） */
+  private setStep(i: number): void {
+    const bar = document.querySelector('#steps')!;
+    if (i < 0) { bar.classList.add('hidden'); return; }
+    bar.classList.remove('hidden');
+    bar.querySelectorAll<HTMLElement>('.stepChip').forEach(chip => {
+      const n = Number(chip.dataset.i);
+      chip.classList.toggle('on', n === i);
+      chip.classList.toggle('done', n < i);
+    });
+  }
+
   /** 月次ニュースのテロップ */
   private setTicker(text: string): void {
     const bar = document.querySelector('#ticker')!;
@@ -553,7 +592,7 @@ export class App {
       <div class="tkwin flowNote">${title}
         <div class="allocList">
           ${this.allocLog.map(l => `<div>${l}</div>`).join('')}
-          <div class="dim">🚚 のこり${this.pool}台／全${this.s.logi.trucks}台</div>
+          <div class="dim">🚚 のこり${this.pool}台／全${this.s.logi.trucks}台（1台${this.loadCap()}箱・使うと今月は戻りません）</div>
         </div>${extraHtml}
       </div>`;
   }
@@ -613,6 +652,7 @@ export class App {
   // ── ①ファーム ──
   private stageFarm(): void {
     this.inFarmStage = true;
+    this.setStep(0);
     this.view.setScene('farm');
     this.view.setTool('shear');
     const s = this.s;
@@ -633,7 +673,8 @@ export class App {
           <span class="hint">空き${room}</span>
         </div>
         <div class="step" data-key="truck">
-          <span class="lbl">🚚 トラック増車 <small>${fmt(TRUCK_PRICE)}G/台</small></span>
+          <span class="lbl">🚚 トラック増車 <small>${fmt(TRUCK_PRICE)}G/台</small>
+            <button class="help" id="truckRule">？ルール</button></span>
           <button class="mini" data-d="1" id="buyTruck">＋</button>
           <span class="hint" id="truckHint">今${s.logi.trucks}台</span>
         </div>
@@ -690,6 +731,10 @@ export class App {
       this.texel('🔪モード。タップした羊は乗り場へ歩いていきます');
     });
     this.panel.querySelector('#buyTruck')!.addEventListener('click', () => this.buyTruck());
+    this.panel.querySelector('#truckRule')!.addEventListener('click', () => {
+      unlockAudio(); SE.decide();
+      this.truckRulePhase(() => this.stageFarm());
+    });
     this.panel.querySelector('#fAch')!.addEventListener('click', () => {
       unlockAudio(); SE.decide();
       this.achievementsPhase(() => this.stageFarm());
@@ -714,6 +759,30 @@ export class App {
       unlockAudio(); SE.buy();
       this.stageTransportA();
     });
+  }
+
+  /** 🚚トラックのルール（何台で何が運べるのか） */
+  private truckRulePhase(back: () => void): void {
+    const s = this.s;
+    const load = this.loadCap();
+    this.panel.innerHTML = `
+      <div class="tkwin stageWin">
+        <div class="secTitle">🚚 トラックのルール <small>いま${s.logi.trucks}台</small></div>
+        <ul class="ruleList">
+          <li><b>1台＝${TRUCK_LOAD}箱</b>を1区間ぶん運べます（羊も毛袋も糸も「1つ＝1箱」）${this.eventId === 'roadWork' ? `<br><small class="minus">※今月は道路工事で${load}箱に減っています</small>` : ''}</li>
+          <li>荷物は<b>区間ごと</b>に運びます。1ヶ月に通る区間は最大7つ：<br>
+            <small>集荷（ファーム→ウール／ファーム→ミート）→ 配達（ウール→アパレル／ミート→デリカ）→ 出荷（アパレル→店／デリカ→店／ミート→店）</small></li>
+          <li>必要な台数＝<b>運ぶ数 ÷ ${TRUCK_LOAD}（切り上げ）</b>。例：羊毛10袋なら2台</li>
+          <li>使った台数は<b>その月は戻りません</b>。7区間ぜんぶ使うと最低7台必要 → <b>今月は毛だけ／肉だけ</b>に絞るのがコツ</li>
+          <li>足りないぶんは<b>積み残し</b>。荷物は消えず<b>翌月に持ちこし</b>されます（腐る商品だけ注意）</li>
+          <li>トラックは<b>毎月ぜんぶ車庫に戻ります</b>（月はじめにリセット）</li>
+          <li>増やす：ここで<b>${fmt(TRUCK_PRICE)}G/台</b>（最大${TRUCK_MAX}台・この期だけ）／ラボの<b>🚚トラック</b>はずっと有効</li>
+        </ul>
+        <div class="note dim">ファーム画面の「見込み🚚◯台/今◯台」が赤いときは、今月このままだと積み残しが出ます</div>
+        <div class="btnRow"><button id="ruleBack" class="primary">← もどる</button></div>
+      </div>`;
+    this.texel('トラックは「区間ごとに何台使うか」の勝負です。欲張ると届きません、メェ');
+    this.panel.querySelector('#ruleBack')!.addEventListener('click', () => { unlockAudio(); SE.decide(); back(); });
   }
 
   // ── ⚾スタジアム観戦（ファーム中ならいつでも寄れる） ──
@@ -811,6 +880,7 @@ export class App {
   // ── ②集荷（ファーム→ウール/ミート） ──
   private stageTransportA(): void {
     this.inFarmStage = false;
+    this.setStep(1);
     this.view.setTool(null);
     this.view.setScene('map');
     this.allocLog = [];
@@ -862,6 +932,7 @@ export class App {
 
   // ── ③しこみ（紡績・と畜） ──
   private stageWork(leftovers: string[] = []): void {
+    this.setStep(2);
     this.view.setScene('work');
     const s = this.s;
     const woolCap = s.companies.wool.capacity;
@@ -970,6 +1041,7 @@ export class App {
 
   // ── ④配達（糸→アパレル・肉→デリカ） ──
   private stageTransportB(): void {
+    this.setStep(3);
     this.view.setScene('map');
     this.meatAtSplit = this.im.meatMeat;
     this.allocLog = [];
@@ -1022,6 +1094,7 @@ export class App {
 
   // ── ⑤加工（レシピ） ──
   private stageCraft(leftovers: string[] = []): void {
+    this.setStep(4);
     this.view.setScene('craft');
     const s = this.s;
     const aCap = s.companies.apparel.capacity;
@@ -1123,6 +1196,7 @@ export class App {
 
   // ── ⑥出荷（→セールス） ──
   private stageTransportC(): void {
+    this.setStep(5);
     this.view.setScene('map');
     this.allocLog = [];
     const mvA = this.alloc('apparel-sales', this.im.apparelGoods, '服', '着');
@@ -1157,6 +1231,7 @@ export class App {
 
   // ── ⑦開店 ──
   private stageMarket(leftovers: string[] = []): void {
+    this.setStep(6);
     this.view.setScene('market');
     const d = this.draft;
     this.panel.innerHTML = `
@@ -1559,6 +1634,7 @@ export class App {
   }
 
   private renderMonthResult(r: MonthlyResult): void {
+    this.setStep(-1);
     const plRows = r.companyPLs.map(p =>
       `<tr><td>${COMPANY_NAMES[p.companyId]}</td><td class="num">${fmt(p.revenue)}</td>
        <td class="num">${fmt(p.cost)}</td>
@@ -1639,6 +1715,7 @@ export class App {
 
   // ── 年度決算（ドラムロール→ランク発表。台本03 §9） ──
   private annual(): void {
+    this.setStep(-1);
     const score = scoreRun(this.s, 0);
     const prevBest = this.meta.bestRank;
     // メタ更新（のれんPを獲得して永続化。財閥級は×2）
@@ -1836,6 +1913,7 @@ export class App {
 
   // ── 🔬ラボ ──
   private labPhase(): void {
+    this.setStep(-1);
     const rows = LAB_NODES.map(node => {
       const lv = levelOf(this.meta, node.id);
       const cost = nextCost(this.meta, node);
@@ -1895,9 +1973,21 @@ export class App {
   private restartRun(): void {
     this.beginPeriod();
   }
+
+  /** 🔠 文字サイズを1段ずつ切り替える（metaはここが唯一の持ち主） */
+  cycleFontScale(): string {
+    const i = FONT_SCALES.findIndex(f => f.id === this.meta.fontScale);
+    const next = FONT_SCALES[(i + 1) % FONT_SCALES.length];
+    this.meta.fontScale = next.id as FontScale;
+    saveMeta(this.meta);
+    applyFontScale(next.id);
+    return next.name;
+  }
 }
 
-export function bootSoundToggle(root: HTMLElement): void {
+/** 🔊🎵🔠 の設定ボタン。ヘッダー帯の中に置く（画面に浮かせると下のボタンを隠すため） */
+export function bootSoundToggle(fallbackRoot: HTMLElement, app: App): void {
+  const root = document.querySelector<HTMLElement>('#hudTools') ?? fallbackRoot;
   const btn = document.createElement('button');
   btn.id = 'seToggle';
   btn.textContent = '🔊';
@@ -1918,4 +2008,28 @@ export function bootSoundToggle(root: HTMLElement): void {
     bgm.textContent = toggleBgm() ? '🎵' : '🚫';
   });
   root.appendChild(bgm);
+
+  // 🔠 文字サイズ（ふつう→大きい→最大）。端末の設定としてlocalStorageに保存
+  const fs = document.createElement('button');
+  fs.id = 'fsToggle';
+  fs.textContent = '🔠';
+  fs.title = '文字サイズ';
+  fs.addEventListener('click', () => {
+    unlockAudio(); SE.decide();
+    showFontToast(`🔠 文字サイズ：${app.cycleFontScale()}`);
+  });
+  root.appendChild(fs);
+}
+
+function showFontToast(text: string): void {
+  const el = document.createElement('div');
+  el.className = 'achToast';
+  el.textContent = text;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2400);
+}
+
+/** 保存済みの文字サイズを起動時に反映 */
+export function bootFontScale(): void {
+  applyFontScale(loadMeta().fontScale);
 }

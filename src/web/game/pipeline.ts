@@ -457,6 +457,17 @@ export class PipelineView {
     }
   }
 
+  /** 場所の名札（背景付きで読みやすく） */
+  private placeLabel(text: string, x: number, y: number, color = '#ffe9a8'): void {
+    const { ctx } = this;
+    ctx.font = '12px DotGothic16, monospace';
+    const w = ctx.measureText(text).width;
+    ctx.fillStyle = 'rgba(13,16,48,.72)';
+    ctx.fillRect(x - 4, y - 12, w + 8, 17);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  }
+
   private skyAndGrass(groundY: number, dt: number): void {
     const { ctx } = this;
     const sky = ctx.createLinearGradient(0, 0, 0, groundY);
@@ -481,15 +492,14 @@ export class PipelineView {
     ctx.fillStyle = '#8a5a33';
     for (let x = PEN_BIG.x; x <= PEN_BIG.x + PEN_BIG.w; x += 24) ctx.fillRect(x, PEN_BIG.y - 8, 5, 22);
     ctx.fillRect(PEN_BIG.x, PEN_BIG.y - 5, PEN_BIG.w, 5); ctx.fillRect(PEN_BIG.x, PEN_BIG.y + 7, PEN_BIG.w, 5);
-    ctx.fillStyle = '#f4efe3'; ctx.font = '10px DotGothic16, monospace';
-    ctx.fillText('🐑ファーム', 10, 16);
+    this.placeLabel('🐑 ファーム（牧場）', 10, 16);
     // 出荷乗り場（右端）
     ctx.fillStyle = '#5c6270'; ctx.fillRect(262, 120, 58, 100);
     ctx.fillStyle = '#e8e4d8';
     for (let y = 130; y < 214; y += 22) ctx.fillRect(286, y, 2, 10);
     drawSprite(ctx, TRUCK, 266, 140, 1.5);
-    ctx.fillStyle = '#f4efe3'; ctx.font = '9px DotGothic16, monospace';
-    ctx.fillText('出荷', 284, 116);
+    ctx.fillStyle = '#f4efe3'; ctx.font = '11px DotGothic16, monospace';
+    ctx.fillText('出荷', 280, 116);
     if (this.overlay && this.overlay.shipWait > 0) {
       const gn = Math.min(this.overlay.goldShipWait, 3);
       for (let i = 0; i < Math.min(3, this.overlay.shipWait); i++) {
@@ -535,8 +545,7 @@ export class PipelineView {
       ctx.fillStyle = dark; ctx.fillRect(x0, 0, CW / 2, CH);
       ctx.fillStyle = color; ctx.fillRect(x0 + 6, 26, CW / 2 - 12, CH - 60);
       ctx.fillStyle = '#2a2418'; ctx.fillRect(x0 + 6, CH - 34, CW / 2 - 12, 28); // 床
-      ctx.fillStyle = '#f4efe3'; ctx.font = '10px DotGothic16, monospace';
-      ctx.fillText(title, x0 + 12, 16);
+      this.placeLabel(title, x0 + 12, 16);
     };
     room(0, lColor, lDark, lTitle);
     room(CW / 2, rColor, rDark, rTitle);
@@ -577,9 +586,9 @@ export class PipelineView {
         ctx.fillStyle = '#fff'; ctx.fillText(`x${o.meatSheep}`, 226, 166);
       }
       pile(256, 90, MEATBOX, o.meatMeat, o.goldMeatMeat, GOLD_MEATBOX);
-      ctx.fillStyle = '#ffd24a'; ctx.font = '9px DotGothic16, monospace';
-      ctx.fillText('タップで紡績→', 24, 196);
-      ctx.fillText('タップでと畜→', 184, 196);
+      ctx.fillStyle = '#ffd24a'; ctx.font = '11px DotGothic16, monospace';
+      ctx.fillText('画面タップで紡績', 22, 196);
+      ctx.fillText('画面タップでと畜', 182, 196);
     } else {
       // アパレル：糸→服
       pile(24, 150, YARNROLL, o.apparelYarn, o.goldApparelYarn, GOLD_YARNROLL);
@@ -587,9 +596,9 @@ export class PipelineView {
       // デリカ：肉→加工品
       pile(184, 150, MEATBOX, o.delicaMeat, o.goldDelicaMeat, GOLD_MEATBOX);
       listPile(256, 90, this.delicaGoodsList, o.delicaGoods, goodsSprite('genghis'));
-      ctx.fillStyle = '#ffd24a'; ctx.font = '9px DotGothic16, monospace';
-      ctx.fillText('レシピは下から', 24, 196);
-      ctx.fillText('レシピは下から', 184, 196);
+      ctx.fillStyle = '#ffd24a'; ctx.font = '11px DotGothic16, monospace';
+      ctx.fillText('下のレシピを選ぶ', 22, 196);
+      ctx.fillText('下のレシピを選ぶ', 182, 196);
     }
   }
 
