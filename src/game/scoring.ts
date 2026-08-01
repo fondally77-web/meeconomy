@@ -11,7 +11,7 @@ export function scoreRun(s: RunState, seed: number): RunResult {
     return {
       score: Math.max(0, total), rank: 'FAIL',
       consolidatedProfitTotal: total, bonuses,
-      norenEarned: Math.max(1, Math.ceil(Math.max(0, total) / 2000)),
+      norenEarned: Math.max(1, Math.ceil(Math.max(0, total) / 8000)),
       seed, bankruptMonth: m?.month,
       failReason: `現金が尽きた月：${(m?.month ?? 0) + 4 > 12 ? (m?.month ?? 0) - 8 : (m?.month ?? 0) + 4}月`,
     };
@@ -38,7 +38,7 @@ export function scoreRun(s: RunState, seed: number): RunResult {
     score, rank,
     consolidatedProfitTotal: total,
     bonuses,
-    norenEarned: Math.max(1, Math.ceil(score / 1000)),
+    norenEarned: Math.max(1, Math.ceil(score / 4000)),
     seed,
   };
 }

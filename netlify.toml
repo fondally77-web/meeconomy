@@ -1,0 +1,15 @@
+# Netlify公開設定（docs/05 §2の想定デプロイ先）
+# 使い方: NetlifyでこのGitHubリポジトリを「Import from Git」するだけで
+#         下記設定が自動で使われます。
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# PWAのService Workerは常に最新を取りに行かせる
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
